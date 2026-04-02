@@ -1,0 +1,1102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>KailenFlow Suite — Local SEO Client Management</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        brand: { DEFAULT:'#C45A30', hover:'#A84A28', light:'#F9E8E0', warm:'#F2ECE4', dark:'#1A1C1E' },
+        phase: { prework:'#6366f1', p1:'#059669', p2:'#d97706', p3:'#dc2626', p4:'#7c3aed', p5:'#0891b2', gbp:'#ea580c', ongoing:'#475569' }
+      }
+    }
+  }
+}
+</script>
+<style>
+@media print { .no-print{display:none!important} .print-only{display:block!important} body{background:#fff!important} }
+.glass{background:rgba(255,255,255,0.5);backdrop-filter:blur(8px)}
+*{scrollbar-width:thin;scrollbar-color:#C45A30 transparent}
+::-webkit-scrollbar{width:6px}::-webkit-scrollbar-thumb{background:#C45A30;border-radius:3px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+.fade-in{animation:fadeIn .2s ease-out}
+@keyframes ringFill{from{stroke-dashoffset:251.2}to{stroke-dashoffset:var(--target)}}
+.ring-animate{animation:ringFill 1s ease-out forwards}
+.touch-target{min-height:44px;min-width:44px}
+</style>
+</head>
+<body class="bg-brand-warm">
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useCallback,useMemo,useRef,createContext,useContext} = React;
+
+// ─── Constants ───
+const STORAGE_KEY = 'kailenflowSuite_v1';
+const PHASE_COLORS = {
+  'Pre-work':'#6366f1','GBP':'#ea580c','Phase 1':'#059669','Phase 2':'#d97706',
+  'Phase 3':'#dc2626','Phase 4':'#7c3aed','Phase 5':'#0891b2','Ongoing':'#475569'
+};
+const PHASES = Object.keys(PHASE_COLORS);
+
+function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,8)}
+function fmt(d){if(!d)return'';const dt=new Date(d);return dt.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}
+function isoDate(d){return new Date(d).toISOString().slice(0,10)}
+function today(){return new Date().toISOString().slice(0,10)}
+
+// ─── Default Data ───
+function makeRankinTasks(){
+  const t=[];let id=1;
+  const add=(phase,title,status='Pending',date='')=>{t.push({id:id++,date:date||today(),title,description:'',phase,status,createdAt:new Date().toISOString(),completedAt:status==='Completed'?new Date().toISOString():null});};
+  // Pre-work
+  add('Pre-work','Verify domain ownership in GSC','Completed');
+  add('Pre-work','Google Search Console setup & sitemap submit','Completed');
+  add('Pre-work','Schema markup cleanup — fix existing errors','In Progress');
+  add('Pre-work','Facebook business page NAP fix','Pending');
+  add('Pre-work','Set up rank tracking for target keywords','Completed');
+  // GBP
+  add('GBP','Write & optimize GBP business description','Completed');
+  add('GBP','Set primary + secondary GBP categories','Completed');
+  add('GBP','Add GBP service: Junk Removal','Completed');
+  add('GBP','Add GBP service: House Cleanouts','Completed');
+  add('GBP','Add GBP service: Appliance Removal','In Progress');
+  add('GBP','Add GBP service: Construction Debris Removal','Pending');
+  add('GBP','Add GBP service: Furniture Removal','Pending');
+  add('GBP','Add GBP service: Yard Debris Removal','Pending');
+  add('GBP','Add GBP service: E-Waste Disposal','Pending');
+  add('GBP','Add GBP service: Residential Trash Collection','Pending');
+  add('GBP','Add GBP service: Commercial Waste Services','Pending');
+  add('GBP','Add GBP service: Trash Trailer Rentals','Pending');
+  add('GBP','Add GBP service: Bulk Waste Pickup','Pending');
+  add('GBP','Add GBP service: Estate Cleanouts','Pending');
+  add('GBP','Add GBP service: Garage Cleanouts','Pending');
+  add('GBP','Add GBP service: Storage Unit Cleanouts','Pending');
+  add('GBP','Add GBP service: Recycling Services','Pending');
+  add('GBP','Add GBP service: Mattress Disposal','Pending');
+  add('GBP','Add GBP service: Hot Tub Removal','Pending');
+  add('GBP','Add GBP service: Tire Disposal','Pending');
+  add('GBP','Set up GBP Q&As (10 questions)','Pending');
+  add('GBP','Upload GBP photos (trucks, team, jobs)','In Progress');
+  add('GBP','Add GBP products for key services','Pending');
+  add('GBP','Set up weekly GBP posting schedule','Pending');
+  add('GBP','Respond to all existing reviews','Completed');
+  // Phase 1
+  add('Phase 1','Create Junk Removal service page','Pending');
+  add('Phase 1','Create House Cleanouts service page','Pending');
+  add('Phase 1','Create Appliance Removal service page','Pending');
+  add('Phase 1','Create Construction Debris Removal page','Pending');
+  add('Phase 1','Create Furniture Removal service page','Pending');
+  add('Phase 1','Create Yard Debris Removal page','Pending');
+  add('Phase 1','Create E-Waste Disposal service page','Pending');
+  add('Phase 1','Create Service Areas hub page','Pending');
+  add('Phase 1','Create Privacy Policy page','Pending');
+  add('Phase 1','Create Terms of Service page','Pending');
+  add('Phase 1','Phase 1 checkpoint — review & QA','Pending');
+  // Phase 2
+  add('Phase 2','Expand Trash Trailer Rentals page','Pending');
+  add('Phase 2','Expand Residential Waste page','Pending');
+  add('Phase 2','Rewrite About page with local trust signals','Pending');
+  add('Phase 2','Optimize Contact page with schema','Pending');
+  add('Phase 2','Build Reviews page with GBP embed','Pending');
+  add('Phase 2','Full internal linking pass','Pending');
+  add('Phase 2','Phase 2 checkpoint — review & QA','Pending');
+  // Phase 3
+  add('Phase 3','Embed Google reviews on homepage','Pending');
+  add('Phase 3','Optimize homepage title tag','Pending');
+  add('Phase 3','Optimize homepage H1','Pending');
+  add('Phase 3','Add service H2 sections to homepage','Pending');
+  add('Phase 3','Add FAQ section to homepage','Pending');
+  add('Phase 3','Resize hero image / add map embed','Pending');
+  add('Phase 3','Monitoring week 1 — check rankings','Pending');
+  add('Phase 3','Monitoring week 2 — check rankings','Pending');
+  add('Phase 3','Monitoring week 3 — check rankings','Pending');
+  add('Phase 3','Monitoring week 4 — check rankings','Pending');
+  add('Phase 3','Adjust based on monitoring data','Pending');
+  add('Phase 3','Phase 3 checkpoint — full QA','Pending');
+  // Phase 4
+  add('Phase 4','Implement comprehensive schema markup','Pending');
+  add('Phase 4','Full site audit checkpoint','Pending');
+  // Phase 5
+  ['Whitney','Axtell','Dawson','Purdon','Navarro Mills','Prairie Hill','Peoria','Malone','Mertens','Mt Calm','Birome'].forEach(c=>add('Phase 5',`Create ${c}, TX service area page`,'Pending'));
+  // Ongoing
+  add('Ongoing','Weekly GBP posts (ongoing)','In Progress');
+  add('Ongoing','Review solicitation program','Pending');
+  add('Ongoing','Bi-weekly photo uploads to GBP','Pending');
+  return t;
+}
+
+function makeArborTasks(){
+  const t=[];let id=200;
+  const add=(phase,title,status='Pending')=>{t.push({id:id++,date:today(),title,description:'',phase,status,createdAt:new Date().toISOString(),completedAt:status==='Completed'?new Date().toISOString():null});};
+  add('Pre-work','Domain verification in GSC','Completed');
+  add('Pre-work','Google Search Console setup','Completed');
+  add('Pre-work','Existing schema audit','Completed');
+  add('Pre-work','Rank tracking setup','Completed');
+  add('Pre-work','Competitor analysis — top 5 Denver arborists','Completed');
+  add('GBP','Optimize GBP business description','Completed');
+  add('GBP','Set primary + secondary categories','Completed');
+  add('GBP','Add all tree services to GBP','Completed');
+  add('GBP','Upload professional photos','Completed');
+  add('GBP','Set up Q&As','Completed');
+  add('GBP','Add GBP products','Completed');
+  add('GBP','Weekly posting schedule active','In Progress');
+  add('GBP','Review response system','Completed');
+  add('Phase 1','Create Tree Removal service page','Completed');
+  add('Phase 1','Create Tree Trimming service page','Completed');
+  add('Phase 1','Create Stump Grinding page','Completed');
+  add('Phase 1','Create Emergency Tree Service page','Completed');
+  add('Phase 1','Create Arborist Consultation page','Completed');
+  add('Phase 1','Create Tree Health Assessment page','In Progress');
+  add('Phase 1','Create Tree Planting page','Pending');
+  add('Phase 1','Service Areas hub page','Completed');
+  add('Phase 1','Privacy Policy & Terms','Completed');
+  add('Phase 2','Expand Tree Removal page with FAQs','Completed');
+  add('Phase 2','Optimize About page','Completed');
+  add('Phase 2','Contact page with schema','Completed');
+  add('Phase 2','Reviews page build','In Progress');
+  add('Phase 2','Internal linking pass','Pending');
+  add('Phase 3','Homepage review embed','Completed');
+  add('Phase 3','Title tag optimization','Completed');
+  add('Phase 3','H1 optimization','Completed');
+  add('Phase 3','Service H2 sections','Completed');
+  add('Phase 3','FAQ section','In Progress');
+  add('Phase 3','Hero + map optimization','Pending');
+  add('Phase 3','Monitoring week 1','Pending');
+  add('Phase 3','Monitoring week 2','Pending');
+  add('Phase 4','Comprehensive schema markup','In Progress');
+  add('Phase 4','Full site audit','Pending');
+  add('Phase 5','Create Aurora, CO service page','Completed');
+  add('Phase 5','Create Lakewood, CO service page','Completed');
+  add('Phase 5','Create Arvada, CO service page','In Progress');
+  add('Phase 5','Create Westminster, CO service page','Pending');
+  add('Phase 5','Create Thornton, CO service page','Pending');
+  add('Phase 5','Create Centennial, CO service page','Pending');
+  add('Phase 5','Create Highlands Ranch, CO service page','Pending');
+  add('Phase 5','Create Littleton, CO service page','Pending');
+  add('Ongoing','Weekly GBP posts','In Progress');
+  add('Ongoing','Review solicitation','In Progress');
+  add('Ongoing','Bi-weekly photo uploads','Pending');
+  return t;
+}
+
+function defaultData(){
+  return {version:1,clients:[
+    {
+      id:uid(),name:'Rankin Waste Management',website:'rankinwaste.com',gbpUrl:'https://www.google.com/maps/place/Rankin+Waste+Management',
+      phone:'(254) 205-6125',address:'175 PR335',city:'Hubbard',state:'TX',primaryCategory:'Waste management service',notes:'',
+      createdAt:new Date().toISOString(),
+      scores:{gbpHealth:{current:38,projected:72},landingPage:{current:32},core30:{current:4,total:18}},
+      rankData:[
+        {id:uid(),keyword:'waste management hubbard tx',avgRank:12,range:'8-18',solv:320,date:today()},
+        {id:uid(),keyword:'junk removal waco',avgRank:24,range:'18-32',solv:880,date:today()},
+        {id:uid(),keyword:'trash trailer rental',avgRank:8,range:'5-14',solv:590,date:today()}
+      ],
+      activities:[
+        {id:uid(),taskId:'',date:new Date(Date.now()-86400000).toISOString(),text:'Client onboarded — initial audit complete',autoGenerated:false,createdAt:new Date(Date.now()-86400000).toISOString()},
+        {id:uid(),taskId:'',date:new Date().toISOString(),text:'GBP business description optimized',autoGenerated:true,createdAt:new Date().toISOString()}
+      ],
+      tasks:makeRankinTasks()
+    },
+    {
+      id:uid(),name:'Arbor Care Tree Solutions',website:'arborcaredenver.com',gbpUrl:'https://www.google.com/maps/place/Arbor+Care+Tree+Solutions',
+      phone:'(303) 555-8742',address:'4521 Elm St',city:'Denver',state:'CO',primaryCategory:'Tree service',notes:'Premium client — monthly retainer',
+      createdAt:new Date().toISOString(),
+      scores:{gbpHealth:{current:72,projected:90},landingPage:{current:70},core30:{current:22,total:35}},
+      rankData:[
+        {id:uid(),keyword:'tree service denver',avgRank:6,range:'3-9',solv:1900,date:today()},
+        {id:uid(),keyword:'tree removal denver',avgRank:4,range:'2-8',solv:1600,date:today()},
+        {id:uid(),keyword:'tree trimming denver',avgRank:7,range:'4-12',solv:1200,date:today()},
+        {id:uid(),keyword:'arborist denver',avgRank:5,range:'3-10',solv:720,date:today()},
+        {id:uid(),keyword:'emergency tree removal denver',avgRank:3,range:'1-6',solv:480,date:today()}
+      ],
+      activities:[
+        {id:uid(),taskId:'',date:new Date(Date.now()-172800000).toISOString(),text:'Phase 1 service pages — 6 of 9 complete',autoGenerated:true,createdAt:new Date(Date.now()-172800000).toISOString()},
+        {id:uid(),taskId:'',date:new Date(Date.now()-86400000).toISOString(),text:'Homepage title tag & H1 optimized',autoGenerated:true,createdAt:new Date(Date.now()-86400000).toISOString()},
+        {id:uid(),taskId:'',date:new Date().toISOString(),text:'Schema markup implementation started',autoGenerated:true,createdAt:new Date().toISOString()}
+      ],
+      tasks:makeArborTasks()
+    }
+  ]};
+}
+
+function loadData(){try{const d=localStorage.getItem(STORAGE_KEY);return d?JSON.parse(d):defaultData()}catch(e){return defaultData()}}
+function saveData(d){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(d));localStorage.setItem(STORAGE_KEY+'_lastSaved',new Date().toISOString())}catch(e){}}
+
+// ─── ScoreRing ───
+function ScoreRing({value,max=100,size=100,label,subtitle}){
+  const pct=max>0?Math.min(value/max*100,100):0;
+  const r=40,c=2*Math.PI*r;
+  const offset=c-(pct/100)*c;
+  const color=pct>70?'#059669':pct>40?'#d97706':'#dc2626';
+  const sz=size;
+  return(
+    <div className="flex flex-col items-center">
+      <svg width={sz} height={sz} viewBox="0 0 100 100" className="transform -rotate-90">
+        <circle cx="50" cy="50" r={r} fill="none" stroke="#e5e7eb" strokeWidth="8"/>
+        <circle cx="50" cy="50" r={r} fill="none" stroke={color} strokeWidth="8" strokeLinecap="round"
+          strokeDasharray={c} strokeDashoffset={offset} style={{'--target':offset}} className="ring-animate transition-all duration-700"/>
+      </svg>
+      <div className="absolute flex flex-col items-center justify-center" style={{width:sz,height:sz}}>
+        <span className="text-xl font-bold" style={{color}}>{Math.round(pct)}%</span>
+      </div>
+      {label&&<span className="text-xs font-semibold text-gray-700 mt-1">{label}</span>}
+      {subtitle&&<span className="text-xs text-gray-500">{subtitle}</span>}
+    </div>
+  );
+}
+
+// ─── PhaseBadge ───
+function PhaseBadge({phase}){
+  const c=PHASE_COLORS[phase]||'#475569';
+  return <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium text-white whitespace-nowrap" style={{backgroundColor:c}}>{phase}</span>;
+}
+
+// ─── Modal ───
+function Modal({open,onClose,title,children,wide}){
+  if(!open)return null;
+  return(
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/40"/>
+      <div className={`relative bg-white rounded-xl shadow-2xl w-full ${wide?'max-w-2xl':'max-w-md'} max-h-[90vh] overflow-y-auto fade-in`} onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between p-4 border-b sticky top-0 bg-white rounded-t-xl z-10">
+          <h3 className="text-lg font-bold text-brand-dark">{title}</h3>
+          <button onClick={onClose} className="touch-target flex items-center justify-center w-8 h-8 rounded-full hover:bg-gray-100 text-gray-500 text-xl">&times;</button>
+        </div>
+        <div className="p-4">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Sidebar ───
+function Sidebar({clients,activeClient,setActiveClient,view,setView,onAddClient,data,setData,sidebarOpen,setSidebarOpen}){
+  const [lastSaved,setLastSaved]=useState(localStorage.getItem(STORAGE_KEY+'_lastSaved'));
+  const [copyMsg,setCopyMsg]=useState('');
+
+  useEffect(()=>{
+    const i=setInterval(()=>setLastSaved(localStorage.getItem(STORAGE_KEY+'_lastSaved')),5000);
+    return()=>clearInterval(i);
+  },[]);
+
+  const handleSave=()=>{
+    const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+    a.download=`kailenflow-backup-${today()}.json`;a.click();
+  };
+  const handleLoad=()=>{
+    const input=document.createElement('input');input.type='file';input.accept='.json';
+    input.onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{try{const d=JSON.parse(ev.target.result);setData(d);saveData(d)}catch(err){alert('Invalid backup file')}};r.readAsText(f)};
+    input.click();
+  };
+  const handleCopy=()=>{navigator.clipboard.writeText(JSON.stringify(data)).then(()=>{setCopyMsg('Copied!');setTimeout(()=>setCopyMsg(''),2000)})};
+  const handlePaste=async()=>{try{const t=await navigator.clipboard.readText();const d=JSON.parse(t);setData(d);saveData(d);setCopyMsg('Pasted!')}catch(e){setCopyMsg('Invalid data')}setTimeout(()=>setCopyMsg(''),2000)};
+
+  const navItems=[
+    {key:'today',icon:'📋',label:"Today's Tasks"},
+    {key:'overview',icon:'📊',label:'All Clients'},
+    {key:'reports',icon:'📄',label:'Reports'}
+  ];
+
+  return(
+    <>
+      {sidebarOpen&&<div className="fixed inset-0 bg-black/40 z-40 lg:hidden" onClick={()=>setSidebarOpen(false)}/>}
+      <aside className={`no-print fixed top-0 left-0 h-full w-[260px] bg-brand-dark text-white z-50 flex flex-col transition-transform duration-300 ${sidebarOpen?'translate-x-0':'-translate-x-full'} lg:translate-x-0`}>
+        <div className="p-4 border-b border-white/10">
+          <h1 className="text-lg font-bold text-brand">KailenFlow Suite</h1>
+          <p className="text-xs text-gray-400 mt-0.5">Local SEO Management</p>
+        </div>
+
+        <nav className="p-2 border-b border-white/10">
+          {navItems.map(n=>(
+            <button key={n.key} onClick={()=>{setView(n.key);setSidebarOpen(false)}}
+              className={`touch-target w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-sm mb-0.5 transition-colors ${view===n.key?'bg-brand text-white':'text-gray-300 hover:bg-white/10'}`}>
+              <span>{n.icon}</span>{n.label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="flex-1 overflow-y-auto p-2">
+          <div className="flex items-center justify-between px-2 mb-2">
+            <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Clients</span>
+            <button onClick={onAddClient} className="touch-target w-7 h-7 flex items-center justify-center rounded-full bg-brand hover:bg-brand-hover text-white text-lg leading-none">+</button>
+          </div>
+          {clients.map(c=>(
+            <button key={c.id} onClick={()=>{setActiveClient(c.id);setView('dashboard');setSidebarOpen(false)}}
+              className={`touch-target w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm mb-0.5 transition-colors ${activeClient===c.id&&view==='dashboard'?'bg-brand text-white':'text-gray-300 hover:bg-white/10'}`}>
+              <div className="w-8 h-8 rounded-full bg-brand/30 flex items-center justify-center text-brand font-bold text-sm flex-shrink-0">
+                {c.name.charAt(0)}
+              </div>
+              <span className="truncate">{c.name}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="p-3 border-t border-white/10 space-y-2">
+          <div className="flex gap-1">
+            <button onClick={handleCopy} className="touch-target flex-1 px-2 py-2 bg-white/10 hover:bg-white/20 rounded text-xs transition-colors">Copy Data</button>
+            <button onClick={handlePaste} className="touch-target flex-1 px-2 py-2 bg-white/10 hover:bg-white/20 rounded text-xs transition-colors">Paste Data</button>
+          </div>
+          {copyMsg&&<p className="text-xs text-center text-green-400">{copyMsg}</p>}
+          <div className="flex gap-1">
+            <button onClick={handleSave} className="touch-target flex-1 px-2 py-2 bg-brand hover:bg-brand-hover rounded text-xs transition-colors">Save Backup</button>
+            <button onClick={handleLoad} className="touch-target flex-1 px-2 py-2 bg-white/10 hover:bg-white/20 rounded text-xs transition-colors">Load Backup</button>
+          </div>
+          {lastSaved&&<p className="text-[10px] text-gray-500 text-center">Last saved: {new Date(lastSaved).toLocaleString()}</p>}
+        </div>
+      </aside>
+    </>
+  );
+}
+
+// ─── Today's Tasks ───
+function TodaysTasks({data,setData}){
+  const [date,setDate]=useState(today());
+  const shiftDate=(days)=>{const d=new Date(date);d.setDate(d.getDate()+days);setDate(isoDate(d))};
+
+  const clientTasks=useMemo(()=>{
+    return data.clients.map(c=>{
+      const tasks=c.tasks.filter(t=>t.date===date);
+      const overdue=c.tasks.filter(t=>t.date<date&&t.status!=='Completed');
+      return {client:c,tasks,overdue};
+    }).filter(ct=>ct.tasks.length>0||ct.overdue.length>0);
+  },[data,date]);
+
+  const allTasks=clientTasks.flatMap(ct=>[...ct.tasks,...(date===today()?ct.overdue:[])]);
+  const done=allTasks.filter(t=>t.status==='Completed').length;
+  const total=allTasks.length;
+  const pct=total?Math.round(done/total*100):0;
+
+  const toggleTask=(clientId,taskId)=>{
+    setData(prev=>{
+      const nd={...prev,clients:prev.clients.map(c=>{
+        if(c.id!==clientId)return c;
+        const tasks=c.tasks.map(t=>{
+          if(t.id!==taskId)return t;
+          const newStatus=t.status==='Completed'?'Pending':'Completed';
+          return{...t,status:newStatus,completedAt:newStatus==='Completed'?new Date().toISOString():null};
+        });
+        const task=tasks.find(t=>t.id===taskId);
+        let activities=[...c.activities];
+        if(task.status==='Completed'){
+          activities.push({id:uid(),taskId:task.id,date:new Date().toISOString(),text:`Completed: ${task.title}`,autoGenerated:true,createdAt:new Date().toISOString()});
+        }
+        return{...c,tasks,activities};
+      })};
+      saveData(nd);return nd;
+    });
+  };
+
+  return(
+    <div className="fade-in">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+        <h2 className="text-2xl font-bold text-brand-dark">Today's Tasks</h2>
+        <div className="flex items-center gap-2">
+          <button onClick={()=>shiftDate(-1)} className="touch-target w-10 h-10 rounded-lg bg-white shadow hover:shadow-md flex items-center justify-center text-lg">←</button>
+          <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="touch-target px-3 py-2 rounded-lg border bg-white shadow text-sm"/>
+          <button onClick={()=>shiftDate(1)} className="touch-target w-10 h-10 rounded-lg bg-white shadow hover:shadow-md flex items-center justify-center text-lg">→</button>
+          <button onClick={()=>setDate(today())} className="touch-target px-3 py-2 bg-brand text-white rounded-lg text-sm hover:bg-brand-hover">Today</button>
+        </div>
+      </div>
+
+      <div className="glass rounded-xl p-4 mb-6">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-medium text-gray-700">Daily Progress</span>
+          <span className="text-sm font-bold text-brand">{done}/{total} tasks</span>
+        </div>
+        <div className="w-full h-3 bg-gray-200 rounded-full overflow-hidden">
+          <div className="h-full bg-brand rounded-full transition-all duration-500" style={{width:`${pct}%`}}/>
+        </div>
+      </div>
+
+      {clientTasks.length===0&&<div className="glass rounded-xl p-8 text-center text-gray-500">No tasks scheduled for this date.</div>}
+
+      {clientTasks.map(({client:c,tasks,overdue})=>(
+        <div key={c.id} className="glass rounded-xl p-4 mb-4">
+          <h3 className="font-bold text-brand-dark mb-3 flex items-center gap-2">
+            <div className="w-8 h-8 rounded-full bg-brand/20 flex items-center justify-center text-brand font-bold text-sm">{c.name.charAt(0)}</div>
+            {c.name}
+          </h3>
+          {date===today()&&overdue.length>0&&(
+            <div className="mb-3">
+              <p className="text-xs font-semibold text-red-600 mb-1">⚠ Overdue</p>
+              {overdue.map(t=>(
+                <label key={t.id} className="touch-target flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-red-50 cursor-pointer border-l-2 border-red-400 mb-1">
+                  <input type="checkbox" checked={t.status==='Completed'} onChange={()=>toggleTask(c.id,t.id)} className="w-5 h-5 accent-brand flex-shrink-0"/>
+                  <div className="flex-1 min-w-0">
+                    <span className={`text-sm ${t.status==='Completed'?'line-through text-gray-400':'text-red-700'}`}>{t.title}</span>
+                    <span className="text-xs text-red-400 ml-2">Due {fmt(t.date)}</span>
+                  </div>
+                  <PhaseBadge phase={t.phase}/>
+                </label>
+              ))}
+            </div>
+          )}
+          {tasks.map(t=>(
+            <label key={t.id} className="touch-target flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-brand-light/50 cursor-pointer mb-1">
+              <input type="checkbox" checked={t.status==='Completed'} onChange={()=>toggleTask(c.id,t.id)} className="w-5 h-5 accent-brand flex-shrink-0"/>
+              <span className={`flex-1 text-sm ${t.status==='Completed'?'line-through text-gray-400':''}`}>{t.title}</span>
+              <PhaseBadge phase={t.phase}/>
+            </label>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Client Dashboard ───
+function ClientDashboard({client,setData}){
+  const c=client;
+  const tasks=c.tasks;
+  const inProgress=tasks.filter(t=>t.status==='In Progress').length;
+  const overdue=tasks.filter(t=>t.date<today()&&t.status!=='Completed').length;
+  const completed=tasks.filter(t=>t.status==='Completed').length;
+  const total=tasks.length;
+  const implPct=total?Math.round(completed/total*100):0;
+
+  const phaseData=PHASES.map(p=>{
+    const pts=tasks.filter(t=>t.phase===p);
+    const done=pts.filter(t=>t.status==='Completed').length;
+    return{phase:p,total:pts.length,done,pct:pts.length?Math.round(done/pts.length*100):0};
+  }).filter(p=>p.total>0);
+
+  const upcoming=tasks.filter(t=>t.status!=='Completed'&&t.date>=today()).sort((a,b)=>a.date.localeCompare(b.date)).slice(0,5);
+  const recent=c.activities.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).slice(0,5);
+
+  return(
+    <div className="fade-in">
+      <h2 className="text-2xl font-bold text-brand-dark mb-1">{c.name}</h2>
+      <p className="text-sm text-gray-500 mb-6">{c.primaryCategory} — {c.city}, {c.state}</p>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+        <div className="glass rounded-xl p-4 flex flex-col items-center relative">
+          <ScoreRing value={c.scores.gbpHealth.current} size={80} label="GBP Health" subtitle={`→${c.scores.gbpHealth.projected}%`}/>
+        </div>
+        <div className="glass rounded-xl p-4 flex flex-col items-center relative">
+          <ScoreRing value={c.scores.landingPage.current} size={80} label="Landing Page"/>
+        </div>
+        <div className="glass rounded-xl p-4 flex flex-col items-center relative">
+          <ScoreRing value={c.scores.core30.current} max={c.scores.core30.total||1} size={80} label="Core 30" subtitle={`${c.scores.core30.current}/${c.scores.core30.total}`}/>
+        </div>
+        <div className="glass rounded-xl p-4 flex flex-col items-center relative">
+          <ScoreRing value={implPct} size={80} label="Implementation"/>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-3 mb-6">
+        <div className="glass rounded-xl p-3 text-center">
+          <p className="text-2xl font-bold text-yellow-600">{inProgress}</p>
+          <p className="text-xs text-gray-500">In Progress</p>
+        </div>
+        <div className="glass rounded-xl p-3 text-center">
+          <p className="text-2xl font-bold text-red-600">{overdue}</p>
+          <p className="text-xs text-gray-500">Overdue</p>
+        </div>
+        <div className="glass rounded-xl p-3 text-center">
+          <p className="text-2xl font-bold text-green-600">{completed}</p>
+          <p className="text-xs text-gray-500">Completed</p>
+        </div>
+      </div>
+
+      <div className="glass rounded-xl p-4 mb-6">
+        <h3 className="font-bold text-brand-dark mb-3">Phase Progress</h3>
+        {phaseData.map(p=>(
+          <div key={p.phase} className="mb-3 last:mb-0">
+            <div className="flex items-center justify-between mb-1">
+              <PhaseBadge phase={p.phase}/>
+              <span className="text-xs text-gray-500">{p.done}/{p.total}</span>
+            </div>
+            <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+              <div className="h-full rounded-full transition-all duration-500" style={{width:`${p.pct}%`,backgroundColor:PHASE_COLORS[p.phase]}}/>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="glass rounded-xl p-4">
+          <h3 className="font-bold text-brand-dark mb-3">Upcoming Tasks</h3>
+          {upcoming.length===0&&<p className="text-sm text-gray-400">No upcoming tasks</p>}
+          {upcoming.map(t=>(
+            <div key={t.id} className="flex items-center gap-2 py-2 border-b last:border-0">
+              <PhaseBadge phase={t.phase}/>
+              <span className="flex-1 text-sm truncate">{t.title}</span>
+              <span className="text-xs text-gray-400">{fmt(t.date)}</span>
+            </div>
+          ))}
+        </div>
+        <div className="glass rounded-xl p-4">
+          <h3 className="font-bold text-brand-dark mb-3">Recent Activity</h3>
+          {recent.length===0&&<p className="text-sm text-gray-400">No activity yet</p>}
+          {recent.map(a=>(
+            <div key={a.id} className="py-2 border-b last:border-0">
+              <div className="flex items-center gap-2">
+                <span className="text-sm flex-1">{a.text}</span>
+                {a.autoGenerated&&<span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full whitespace-nowrap">Auto-logged</span>}
+              </div>
+              <span className="text-xs text-gray-400">{fmt(a.createdAt)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Tasks Tab ───
+function TasksTab({client,setData}){
+  const [filter,setFilter]=useState('All');
+  const [phaseFilter,setPhaseFilter]=useState('All');
+  const [modalOpen,setModalOpen]=useState(false);
+  const [editTask,setEditTask]=useState(null);
+  const [form,setForm]=useState({title:'',description:'',phase:'Pre-work',date:today(),status:'Pending'});
+
+  const tasks=useMemo(()=>{
+    let t=[...client.tasks];
+    if(filter!=='All')t=t.filter(x=>x.status===filter);
+    if(phaseFilter!=='All')t=t.filter(x=>x.phase===phaseFilter);
+    return t.sort((a,b)=>a.date.localeCompare(b.date));
+  },[client.tasks,filter,phaseFilter]);
+
+  const openAdd=()=>{setEditTask(null);setForm({title:'',description:'',phase:'Pre-work',date:today(),status:'Pending'});setModalOpen(true)};
+  const openEdit=(t)=>{setEditTask(t);setForm({title:t.title,description:t.description||'',phase:t.phase,date:t.date,status:t.status});setModalOpen(true)};
+
+  const saveTask=()=>{
+    if(!form.title.trim())return;
+    setData(prev=>{
+      const nd={...prev,clients:prev.clients.map(c=>{
+        if(c.id!==client.id)return c;
+        let tasks,activities=[...c.activities];
+        if(editTask){
+          tasks=c.tasks.map(t=>t.id===editTask.id?{...t,...form,completedAt:form.status==='Completed'&&!t.completedAt?new Date().toISOString():t.completedAt}:t);
+        }else{
+          const newT={id:Date.now(),date:form.date,title:form.title,description:form.description,phase:form.phase,status:form.status,createdAt:new Date().toISOString(),completedAt:null};
+          tasks=[...c.tasks,newT];
+          activities.push({id:uid(),taskId:newT.id,date:new Date().toISOString(),text:`Task added: ${newT.title}`,autoGenerated:true,createdAt:new Date().toISOString()});
+        }
+        return{...c,tasks,activities};
+      })};
+      saveData(nd);return nd;
+    });
+    setModalOpen(false);
+  };
+
+  const toggleTask=(taskId)=>{
+    setData(prev=>{
+      const nd={...prev,clients:prev.clients.map(c=>{
+        if(c.id!==client.id)return c;
+        const tasks=c.tasks.map(t=>{
+          if(t.id!==taskId)return t;
+          const ns=t.status==='Completed'?'Pending':'Completed';
+          return{...t,status:ns,completedAt:ns==='Completed'?new Date().toISOString():null};
+        });
+        const task=tasks.find(t=>t.id===taskId);
+        let activities=[...c.activities];
+        if(task.status==='Completed'){activities.push({id:uid(),taskId:task.id,date:new Date().toISOString(),text:`Completed: ${task.title}`,autoGenerated:true,createdAt:new Date().toISOString()})}
+        return{...c,tasks,activities};
+      })};
+      saveData(nd);return nd;
+    });
+  };
+
+  const deleteTask=(taskId)=>{
+    if(!confirm('Delete this task?'))return;
+    setData(prev=>{
+      const nd={...prev,clients:prev.clients.map(c=>{
+        if(c.id!==client.id)return c;
+        return{...c,tasks:c.tasks.filter(t=>t.id!==taskId)};
+      })};
+      saveData(nd);return nd;
+    });
+  };
+
+  const statusButtons=['All','Pending','In Progress','Completed'];
+
+  return(
+    <div className="fade-in">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+        <h3 className="text-xl font-bold text-brand-dark">Tasks</h3>
+        <button onClick={openAdd} className="touch-target px-4 py-2 bg-brand text-white rounded-lg hover:bg-brand-hover text-sm font-medium">+ Add Task</button>
+      </div>
+
+      <div className="flex flex-wrap gap-2 mb-4">
+        {statusButtons.map(s=>(
+          <button key={s} onClick={()=>setFilter(s)} className={`touch-target px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${filter===s?'bg-brand text-white':'bg-white text-gray-600 hover:bg-gray-100'}`}>{s}</button>
+        ))}
+        <select value={phaseFilter} onChange={e=>setPhaseFilter(e.target.value)} className="touch-target px-3 py-1.5 rounded-full text-sm bg-white border">
+          <option>All</option>
+          {PHASES.map(p=><option key={p}>{p}</option>)}
+        </select>
+      </div>
+
+      <div className="space-y-2">
+        {tasks.map(t=>(
+          <div key={t.id} className={`glass rounded-xl p-3 flex items-center gap-3 ${t.date<today()&&t.status!=='Completed'?'border-l-4 border-red-400':''}`}>
+            <input type="checkbox" checked={t.status==='Completed'} onChange={()=>toggleTask(t.id)} className="w-5 h-5 accent-brand flex-shrink-0"/>
+            <div className="flex-1 min-w-0" onClick={()=>openEdit(t)}>
+              <p className={`text-sm font-medium ${t.status==='Completed'?'line-through text-gray-400':''} cursor-pointer`}>{t.title}</p>
+              <div className="flex items-center gap-2 mt-1 flex-wrap">
+                <PhaseBadge phase={t.phase}/>
+                <span className="text-xs text-gray-400">{fmt(t.date)}</span>
+                <span className={`text-xs px-1.5 py-0.5 rounded ${t.status==='Completed'?'bg-green-100 text-green-700':t.status==='In Progress'?'bg-yellow-100 text-yellow-700':'bg-gray-100 text-gray-600'}`}>{t.status}</span>
+              </div>
+            </div>
+            <button onClick={()=>deleteTask(t.id)} className="touch-target w-8 h-8 flex items-center justify-center text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg flex-shrink-0">✕</button>
+          </div>
+        ))}
+        {tasks.length===0&&<div className="glass rounded-xl p-8 text-center text-gray-500">No tasks match your filters.</div>}
+      </div>
+
+      <Modal open={modalOpen} onClose={()=>setModalOpen(false)} title={editTask?'Edit Task':'Add Task'}>
+        <div className="space-y-3">
+          <div><label className="text-sm font-medium text-gray-700">Title</label><input value={form.title} onChange={e=>setForm(p=>({...p,title:e.target.value}))} className="touch-target w-full mt-1 px-3 py-2 border rounded-lg" placeholder="Task title"/></div>
+          <div><label className="text-sm font-medium text-gray-700">Description</label><textarea value={form.description} onChange={e=>setForm(p=>({...p,description:e.target.value}))} className="w-full mt-1 px-3 py-2 border rounded-lg" rows="2"/></div>
+          <div className="grid grid-cols-2 gap-3">
+            <div><label className="text-sm font-medium text-gray-700">Phase</label><select value={form.phase} onChange={e=>setForm(p=>({...p,phase:e.target.value}))} className="touch-target w-full mt-1 px-3 py-2 border rounded-lg">{PHASES.map(p=><option key={p}>{p}</option>)}</select></div>
+            <div><label className="text-sm font-medium text-gray-700">Date</label><input type="date" value={form.date} onChange={e=>setForm(p=>({...p,date:e.target.value}))} className="touch-target w-full mt-1 px-3 py-2 border rounded-lg"/></div>
+          </div>
+          <div><label className="text-sm font-medium text-gray-700">Status</label><select value={form.status} onChange={e=>setForm(p=>({...p,status:e.target.value}))} className="touch-target w-full mt-1 px-3 py-2 border rounded-lg"><option>Pending</option><option>In Progress</option><option>Completed</option></select></div>
+          <button onClick={saveTask} className="touch-target w-full py-2.5 bg-brand text-white rounded-lg hover:bg-brand-hover font-medium">{editTask?'Update Task':'Add Task'}</button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+// ─── Activity Log ───
+function ActivityLog({client,setData}){
+  const [text,setText]=useState('');
+  const activities=useMemo(()=>[...client.activities].sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)),[client.activities]);
+
+  const addEntry=()=>{
+    if(!text.trim())return;
+    setData(prev=>{
+      const nd={...prev,clients:prev.clients.map(c=>{
+        if(c.id!==client.id)return c;
+        return{...c,activities:[...c.activities,{id:uid(),taskId:'',date:new Date().toISOString(),text:text.trim(),autoGenerated:false,createdAt:new Date().toISOString()}]};
+      })};
+      saveData(nd);return nd;
+    });
+    setText('');
+  };
+
+  return(
+    <div className="fade-in">
+      <h3 className="text-xl font-bold text-brand-dark mb-4">Activity Log</h3>
+      <div className="flex gap-2 mb-4">
+        <input value={text} onChange={e=>setText(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addEntry()} placeholder="Add a manual entry..." className="touch-target flex-1 px-3 py-2 border rounded-lg"/>
+        <button onClick={addEntry} className="touch-target px-4 py-2 bg-brand text-white rounded-lg hover:bg-brand-hover text-sm">Add</button>
+      </div>
+      <div className="space-y-2">
+        {activities.map(a=>(
+          <div key={a.id} className="glass rounded-xl p-3 flex items-start gap-3">
+            <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${a.autoGenerated?'bg-blue-400':'bg-brand'}`}/>
+            <div className="flex-1">
+              <p className="text-sm">{a.text}</p>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-xs text-gray-400">{fmt(a.createdAt)}</span>
+                {a.autoGenerated&&<span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full">Auto-logged</span>}
+              </div>
+            </div>
+          </div>
+        ))}
+        {activities.length===0&&<div className="glass rounded-xl p-8 text-center text-gray-500">No activity recorded yet.</div>}
+      </div>
+    </div>
+  );
+}
+
+// ─── Rankings Tab ───
+function RankingsTab({client,setData}){
+  const [modalOpen,setModalOpen]=useState(false);
+  const [form,setForm]=useState({keyword:'',avgRank:'',range:'',solv:'',date:today()});
+
+  const addRank=()=>{
+    if(!form.keyword.trim())return;
+    setData(prev=>{
+      const nd={...prev,clients:prev.clients.map(c=>{
+        if(c.id!==client.id)return c;
+        return{...c,rankData:[...c.rankData,{id:uid(),keyword:form.keyword,avgRank:Number(form.avgRank)||0,range:form.range,solv:Number(form.solv)||0,date:form.date}]};
+      })};
+      saveData(nd);return nd;
+    });
+    setModalOpen(false);setForm({keyword:'',avgRank:'',range:'',solv:'',date:today()});
+  };
+
+  const rankColor=(r)=>r<=3?'text-green-600':r<=10?'text-yellow-600':r<=20?'text-orange-600':'text-red-600';
+
+  return(
+    <div className="fade-in">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-xl font-bold text-brand-dark">Rankings</h3>
+        <button onClick={()=>setModalOpen(true)} className="touch-target px-4 py-2 bg-brand text-white rounded-lg hover:bg-brand-hover text-sm">+ Add Keyword</button>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {client.rankData.map(r=>(
+          <div key={r.id} className="glass rounded-xl p-4">
+            <p className="text-sm font-bold text-brand-dark mb-2 truncate">{r.keyword}</p>
+            <div className="flex items-end gap-3">
+              <div>
+                <p className="text-xs text-gray-400">Avg Position</p>
+                <p className={`text-3xl font-bold ${rankColor(r.avgRank)}`}>{r.avgRank}</p>
+              </div>
+              <div className="flex-1">
+                <p className="text-xs text-gray-400">Range</p>
+                <p className="text-sm font-medium">{r.range}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-400">Volume</p>
+                <p className="text-sm font-medium">{r.solv}</p>
+              </div>
+            </div>
+            <p className="text-xs text-gray-400 mt-2">Updated {fmt(r.date)}</p>
+          </div>
+        ))}
+        {client.rankData.length===0&&<div className="glass rounded-xl p-8 text-center text-gray-500 col-span-full">No ranking data yet.</div>}
+      </div>
+      <Modal open={modalOpen} onClose={()=>setModalOpen(false)} title="Add Keyword">
+        <div className="space-y-3">
+          <input value={form.keyword} onChange={e=>setForm(p=>({...p,keyword:e.target.value}))} placeholder="Keyword" className="touch-target w-full px-3 py-2 border rounded-lg"/>
+          <div className="grid grid-cols-3 gap-2">
+            <input value={form.avgRank} onChange={e=>setForm(p=>({...p,avgRank:e.target.value}))} placeholder="Avg Rank" type="number" className="touch-target px-3 py-2 border rounded-lg"/>
+            <input value={form.range} onChange={e=>setForm(p=>({...p,range:e.target.value}))} placeholder="Range" className="touch-target px-3 py-2 border rounded-lg"/>
+            <input value={form.solv} onChange={e=>setForm(p=>({...p,solv:e.target.value}))} placeholder="Volume" type="number" className="touch-target px-3 py-2 border rounded-lg"/>
+          </div>
+          <input type="date" value={form.date} onChange={e=>setForm(p=>({...p,date:e.target.value}))} className="touch-target w-full px-3 py-2 border rounded-lg"/>
+          <button onClick={addRank} className="touch-target w-full py-2.5 bg-brand text-white rounded-lg hover:bg-brand-hover font-medium">Add Keyword</button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+// ─── Settings Tab ───
+function SettingsTab({client,setData}){
+  const update=(field,value)=>{
+    setData(prev=>{
+      const nd={...prev,clients:prev.clients.map(c=>c.id===client.id?{...c,[field]:value}:c)};
+      saveData(nd);return nd;
+    });
+  };
+  const updateScore=(path,value)=>{
+    setData(prev=>{
+      const nd={...prev,clients:prev.clients.map(c=>{
+        if(c.id!==client.id)return c;
+        const scores={...c.scores};
+        const parts=path.split('.');
+        if(parts.length===2){
+          scores[parts[0]]={...scores[parts[0]],[parts[1]]:Number(value)||0};
+        }
+        return{...c,scores};
+      })};
+      saveData(nd);return nd;
+    });
+  };
+  const exportClient=()=>{
+    const blob=new Blob([JSON.stringify(client,null,2)],{type:'application/json'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`${client.name.replace(/\s+/g,'-').toLowerCase()}-export.json`;a.click();
+  };
+  const deleteClient=()=>{
+    if(!confirm(`Delete ${client.name}? This cannot be undone.`))return;
+    setData(prev=>{
+      const nd={...prev,clients:prev.clients.filter(c=>c.id!==client.id)};
+      saveData(nd);return nd;
+    });
+  };
+
+  const Field=({label,field,type='text'})=>(
+    <div>
+      <label className="text-sm font-medium text-gray-700">{label}</label>
+      <input type={type} value={client[field]||''} onChange={e=>update(field,e.target.value)} className="touch-target w-full mt-1 px-3 py-2 border rounded-lg"/>
+    </div>
+  );
+
+  return(
+    <div className="fade-in">
+      <h3 className="text-xl font-bold text-brand-dark mb-4">Client Settings</h3>
+      <div className="glass rounded-xl p-4 mb-4">
+        <h4 className="font-semibold text-brand-dark mb-3">Client Info</h4>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <Field label="Name" field="name"/>
+          <Field label="Website" field="website"/>
+          <Field label="GBP URL" field="gbpUrl"/>
+          <Field label="Phone" field="phone"/>
+          <Field label="Primary Category" field="primaryCategory"/>
+          <Field label="Address" field="address"/>
+          <Field label="City" field="city"/>
+          <Field label="State" field="state"/>
+        </div>
+        <div className="mt-3">
+          <label className="text-sm font-medium text-gray-700">Notes</label>
+          <textarea value={client.notes||''} onChange={e=>update('notes',e.target.value)} className="w-full mt-1 px-3 py-2 border rounded-lg" rows="3"/>
+        </div>
+      </div>
+
+      <div className="glass rounded-xl p-4 mb-4">
+        <h4 className="font-semibold text-brand-dark mb-3">Scores</h4>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          <div><label className="text-xs text-gray-500">GBP Current</label><input type="number" value={client.scores.gbpHealth.current} onChange={e=>updateScore('gbpHealth.current',e.target.value)} className="touch-target w-full mt-1 px-3 py-2 border rounded-lg"/></div>
+          <div><label className="text-xs text-gray-500">GBP Projected</label><input type="number" value={client.scores.gbpHealth.projected} onChange={e=>updateScore('gbpHealth.projected',e.target.value)} className="touch-target w-full mt-1 px-3 py-2 border rounded-lg"/></div>
+          <div><label className="text-xs text-gray-500">Landing Page</label><input type="number" value={client.scores.landingPage.current} onChange={e=>updateScore('landingPage.current',e.target.value)} className="touch-target w-full mt-1 px-3 py-2 border rounded-lg"/></div>
+          <div><label className="text-xs text-gray-500">Core 30 Current</label><input type="number" value={client.scores.core30.current} onChange={e=>updateScore('core30.current',e.target.value)} className="touch-target w-full mt-1 px-3 py-2 border rounded-lg"/></div>
+          <div><label className="text-xs text-gray-500">Core 30 Total</label><input type="number" value={client.scores.core30.total} onChange={e=>updateScore('core30.total',e.target.value)} className="touch-target w-full mt-1 px-3 py-2 border rounded-lg"/></div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <button onClick={exportClient} className="touch-target px-4 py-2 bg-brand text-white rounded-lg hover:bg-brand-hover text-sm">Export Client Data</button>
+        <button onClick={deleteClient} className="touch-target px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm">Delete Client</button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Reports Tab ───
+function ReportsTab({data}){
+  const [clientId,setClientId]=useState(data.clients[0]?.id||'');
+  const [month,setMonth]=useState(new Date().toISOString().slice(0,7));
+  const client=data.clients.find(c=>c.id===clientId);
+
+  const handlePrint=()=>window.print();
+
+  if(!client)return <div className="text-gray-500">No clients available.</div>;
+
+  const tasks=client.tasks;
+  const completed=tasks.filter(t=>t.status==='Completed');
+  const inProgress=tasks.filter(t=>t.status==='In Progress');
+  const monthActivities=client.activities.filter(a=>a.createdAt?.slice(0,7)===month);
+
+  return(
+    <div className="fade-in">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 no-print">
+        <h3 className="text-xl font-bold text-brand-dark">Monthly SEO Report</h3>
+        <div className="flex items-center gap-2 flex-wrap">
+          <select value={clientId} onChange={e=>setClientId(e.target.value)} className="touch-target px-3 py-2 border rounded-lg text-sm">
+            {data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <input type="month" value={month} onChange={e=>setMonth(e.target.value)} className="touch-target px-3 py-2 border rounded-lg text-sm"/>
+          <button onClick={handlePrint} className="touch-target px-4 py-2 bg-brand text-white rounded-lg hover:bg-brand-hover text-sm">Print / PDF</button>
+        </div>
+      </div>
+
+      <div className="glass rounded-xl p-6 print:shadow-none print:p-0">
+        <div className="text-center mb-6 pb-4 border-b">
+          <h1 className="text-2xl font-bold text-brand">KailenFlow Suite</h1>
+          <h2 className="text-lg font-semibold text-brand-dark mt-1">Monthly SEO Report — {client.name}</h2>
+          <p className="text-sm text-gray-500">{new Date(month+'-01').toLocaleDateString('en-US',{month:'long',year:'numeric'})}</p>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+          <div className="text-center p-3 bg-brand-light rounded-lg">
+            <p className="text-2xl font-bold text-brand">{client.scores.gbpHealth.current}%</p>
+            <p className="text-xs text-gray-600">GBP Health</p>
+          </div>
+          <div className="text-center p-3 bg-brand-light rounded-lg">
+            <p className="text-2xl font-bold text-brand">{client.scores.landingPage.current}%</p>
+            <p className="text-xs text-gray-600">Landing Page</p>
+          </div>
+          <div className="text-center p-3 bg-brand-light rounded-lg">
+            <p className="text-2xl font-bold text-brand">{client.scores.core30.current}/{client.scores.core30.total}</p>
+            <p className="text-xs text-gray-600">Core 30</p>
+          </div>
+          <div className="text-center p-3 bg-brand-light rounded-lg">
+            <p className="text-2xl font-bold text-brand">{tasks.length>0?Math.round(completed.length/tasks.length*100):0}%</p>
+            <p className="text-xs text-gray-600">Implementation</p>
+          </div>
+        </div>
+
+        <div className="mb-6">
+          <h3 className="font-bold text-brand-dark mb-2">Task Summary</h3>
+          <p className="text-sm text-gray-700">Total tasks: {tasks.length} — Completed: {completed.length} — In Progress: {inProgress.length} — Remaining: {tasks.length-completed.length-inProgress.length}</p>
+        </div>
+
+        {client.rankData.length>0&&(
+          <div className="mb-6">
+            <h3 className="font-bold text-brand-dark mb-2">Keyword Rankings</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead><tr className="border-b"><th className="text-left py-2">Keyword</th><th className="text-right py-2">Position</th><th className="text-right py-2">Range</th><th className="text-right py-2">Volume</th></tr></thead>
+                <tbody>
+                  {client.rankData.map(r=><tr key={r.id} className="border-b"><td className="py-2">{r.keyword}</td><td className="text-right font-bold">{r.avgRank}</td><td className="text-right">{r.range}</td><td className="text-right">{r.solv}</td></tr>)}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {monthActivities.length>0&&(
+          <div>
+            <h3 className="font-bold text-brand-dark mb-2">Activity This Month</h3>
+            <ul className="space-y-1">
+              {monthActivities.slice(0,15).map(a=><li key={a.id} className="text-sm text-gray-700 flex items-start gap-2"><span className="text-brand mt-0.5">•</span>{a.text}</li>)}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── All Clients Overview ───
+function AllClientsOverview({data,setActiveClient,setView}){
+  return(
+    <div className="fade-in">
+      <h2 className="text-2xl font-bold text-brand-dark mb-6">All Clients Overview</h2>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {data.clients.map(c=>{
+          const total=c.tasks.length;
+          const done=c.tasks.filter(t=>t.status==='Completed').length;
+          const pct=total?Math.round(done/total*100):0;
+          return(
+            <div key={c.id} onClick={()=>{setActiveClient(c.id);setView('dashboard')}} className="glass rounded-xl p-5 cursor-pointer hover:shadow-lg transition-shadow">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-12 h-12 rounded-full bg-brand/20 flex items-center justify-center text-brand font-bold text-lg">{c.name.charAt(0)}</div>
+                <div>
+                  <h3 className="font-bold text-brand-dark">{c.name}</h3>
+                  <p className="text-xs text-gray-500">{c.city}, {c.state}</p>
+                </div>
+              </div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm text-gray-600">{done}/{total} tasks</span>
+                <span className="text-sm font-bold text-brand">{pct}%</span>
+              </div>
+              <div className="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+                <div className="h-full bg-brand rounded-full transition-all" style={{width:`${pct}%`}}/>
+              </div>
+              <div className="grid grid-cols-3 gap-2 mt-3 text-center">
+                <div><p className="text-xs text-gray-400">GBP</p><p className="text-sm font-bold">{c.scores.gbpHealth.current}%</p></div>
+                <div><p className="text-xs text-gray-400">LP</p><p className="text-sm font-bold">{c.scores.landingPage.current}%</p></div>
+                <div><p className="text-xs text-gray-400">Core 30</p><p className="text-sm font-bold">{c.scores.core30.current}/{c.scores.core30.total}</p></div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── Main App ───
+function App(){
+  const [data,setData]=useState(loadData);
+  const [activeClient,setActiveClient]=useState(data.clients[0]?.id||'');
+  const [view,setView]=useState('today');
+  const [tab,setTab]=useState('dashboard');
+  const [sidebarOpen,setSidebarOpen]=useState(false);
+  const [addModalOpen,setAddModalOpen]=useState(false);
+  const [newClientName,setNewClientName]=useState('');
+
+  // Auto-save
+  useEffect(()=>{saveData(data)},[data]);
+
+  // 24h auto-backup
+  useEffect(()=>{
+    const lastBackup=localStorage.getItem(STORAGE_KEY+'_lastBackup');
+    const now=Date.now();
+    if(!lastBackup||now-Number(lastBackup)>86400000){
+      localStorage.setItem(STORAGE_KEY+'_lastBackup',String(now));
+      const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+      const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`kailenflow-autobackup-${today()}.json`;a.click();
+    }
+  },[]);
+
+  const client=data.clients.find(c=>c.id===activeClient);
+
+  const addClient=()=>{
+    if(!newClientName.trim())return;
+    const nc={id:uid(),name:newClientName.trim(),website:'',gbpUrl:'',phone:'',address:'',city:'',state:'',primaryCategory:'',notes:'',createdAt:new Date().toISOString(),
+      scores:{gbpHealth:{current:0,projected:0},landingPage:{current:0},core30:{current:0,total:0}},rankData:[],activities:[],tasks:[]};
+    setData(prev=>{const nd={...prev,clients:[...prev.clients,nc]};saveData(nd);return nd});
+    setActiveClient(nc.id);setView('dashboard');setTab('settings');setAddModalOpen(false);setNewClientName('');
+  };
+
+  const tabs=[
+    {key:'dashboard',label:'Dashboard',icon:'📊'},
+    {key:'tasks',label:'Tasks',icon:'✓'},
+    {key:'activity',label:'Activity',icon:'📝'},
+    {key:'rankings',label:'Rankings',icon:'📈'},
+    {key:'settings',label:'Settings',icon:'⚙'},
+    {key:'reports',label:'Reports',icon:'📄'}
+  ];
+
+  // Correct activeClient if deleted
+  useEffect(()=>{
+    if(!data.clients.find(c=>c.id===activeClient)&&data.clients.length>0){
+      setActiveClient(data.clients[0].id);
+    }
+  },[data.clients,activeClient]);
+
+  return(
+    <div className="flex min-h-screen">
+      <Sidebar clients={data.clients} activeClient={activeClient} setActiveClient={setActiveClient}
+        view={view} setView={setView} onAddClient={()=>setAddModalOpen(true)}
+        data={data} setData={setData} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen}/>
+
+      <main className="flex-1 lg:ml-[260px] min-h-screen pb-20 lg:pb-6">
+        {/* Mobile header */}
+        <div className="no-print sticky top-0 z-30 lg:hidden bg-brand-warm/95 backdrop-blur border-b px-4 py-3 flex items-center gap-3">
+          <button onClick={()=>setSidebarOpen(true)} className="touch-target w-10 h-10 flex items-center justify-center rounded-lg hover:bg-white/50">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1A1C1E" strokeWidth="2" strokeLinecap="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+          </button>
+          <h1 className="text-lg font-bold text-brand-dark truncate">KailenFlow Suite</h1>
+        </div>
+
+        <div className="p-4 sm:p-6 max-w-6xl mx-auto">
+          {view==='today'&&<TodaysTasks data={data} setData={setData}/>}
+          {view==='overview'&&<AllClientsOverview data={data} setActiveClient={setActiveClient} setView={()=>setView('dashboard')}/>}
+          {view==='reports'&&<ReportsTab data={data}/>}
+          {view==='dashboard'&&client&&(
+            <>
+              {/* Tab bar */}
+              <div className="no-print flex gap-1 mb-6 overflow-x-auto pb-1 -mx-4 px-4 sm:mx-0 sm:px-0">
+                {tabs.map(t=>(
+                  <button key={t.key} onClick={()=>setTab(t.key)}
+                    className={`touch-target flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${tab===t.key?'bg-brand text-white shadow':'bg-white text-gray-600 hover:bg-gray-100'}`}>
+                    <span className="hidden sm:inline">{t.icon}</span>{t.label}
+                  </button>
+                ))}
+              </div>
+              {tab==='dashboard'&&<ClientDashboard client={client} setData={setData}/>}
+              {tab==='tasks'&&<TasksTab client={client} setData={setData}/>}
+              {tab==='activity'&&<ActivityLog client={client} setData={setData}/>}
+              {tab==='rankings'&&<RankingsTab client={client} setData={setData}/>}
+              {tab==='settings'&&<SettingsTab client={client} setData={setData}/>}
+              {tab==='reports'&&<ReportsTab data={data}/>}
+            </>
+          )}
+        </div>
+
+        {/* Mobile bottom nav */}
+        <div className="no-print fixed bottom-0 left-0 right-0 lg:hidden bg-white border-t shadow-lg z-30">
+          <div className="flex">
+            {[{key:'today',icon:'📋',label:'Today'},{key:'dashboard',icon:'📊',label:'Client'},{key:'overview',icon:'👥',label:'All'},{key:'reports',icon:'📄',label:'Reports'}].map(n=>(
+              <button key={n.key} onClick={()=>{setView(n.key);if(n.key==='dashboard'&&!client&&data.clients[0])setActiveClient(data.clients[0].id)}}
+                className={`flex-1 flex flex-col items-center py-2 text-xs ${view===n.key?'text-brand font-bold':'text-gray-500'}`}>
+                <span className="text-lg">{n.icon}</span>{n.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </main>
+
+      <Modal open={addModalOpen} onClose={()=>setAddModalOpen(false)} title="Add New Client">
+        <div className="space-y-3">
+          <input value={newClientName} onChange={e=>setNewClientName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&addClient()}
+            placeholder="Client name" className="touch-target w-full px-3 py-2 border rounded-lg" autoFocus/>
+          <button onClick={addClient} className="touch-target w-full py-2.5 bg-brand text-white rounded-lg hover:bg-brand-hover font-medium">Add Client</button>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
