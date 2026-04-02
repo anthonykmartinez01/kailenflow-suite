@@ -8,6 +8,21 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script>
+  firebase.initializeApp({
+    apiKey: "AIzaSyCVBXYC3clGwMMPid1PjpHDTafmW4eF9wg",
+    authDomain: "kailenflow-suite.firebaseapp.com",
+    projectId: "kailenflow-suite",
+    storageBucket: "kailenflow-suite.firebasestorage.app",
+    messagingSenderId: "583939481208",
+    appId: "1:583939481208:web:0b825f697ca2546788978d",
+    measurementId: "G-KZT0H3BFNK"
+  });
+  const db = firebase.firestore();
+</script>
 <script>
 tailwind.config = {
   theme: {
@@ -225,8 +240,36 @@ function defaultData(){
   ]};
 }
 
-function loadData(){try{const d=localStorage.getItem(STORAGE_KEY);return d?JSON.parse(d):defaultData()}catch(e){return defaultData()}}
-function saveData(d){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(d));localStorage.setItem(STORAGE_KEY+'_lastSaved',new Date().toISOString())}catch(e){}}
+// ─── Firebase + localStorage hybrid ───
+const FIRESTORE_DOC = db.collection('appData').doc('main');
+let _firestoreReady = false;
+let _onFirestoreData = null; // callback set by App component
+
+function loadData(){
+  try{const d=localStorage.getItem(STORAGE_KEY);return d?JSON.parse(d):defaultData()}catch(e){return defaultData()}
+}
+
+function saveData(d){
+  try{
+    localStorage.setItem(STORAGE_KEY,JSON.stringify(d));
+    localStorage.setItem(STORAGE_KEY+'_lastSaved',new Date().toISOString());
+  }catch(e){}
+  // Save to Firestore (cloud) so all devices stay in sync
+  FIRESTORE_DOC.set({json:JSON.stringify(d),updatedAt:firebase.firestore.FieldValue.serverTimestamp()}).catch(err=>console.warn('Firestore save failed:',err));
+}
+
+// Real-time listener — fires whenever ANY device saves
+let _skipNextSnapshot = false;
+FIRESTORE_DOC.onSnapshot(snap=>{
+  if(!snap.exists) return;
+  if(_skipNextSnapshot){_skipNextSnapshot=false;return;}
+  try{
+    const d=JSON.parse(snap.data().json);
+    localStorage.setItem(STORAGE_KEY,JSON.stringify(d));
+    localStorage.setItem(STORAGE_KEY+'_lastSaved',new Date().toISOString());
+    if(_onFirestoreData) _onFirestoreData(d);
+  }catch(e){}
+});
 
 // ─── ScoreRing ───
 function ScoreRing({value,max=100,size=100,label,subtitle}){
@@ -347,7 +390,7 @@ function Sidebar({clients,activeClient,setActiveClient,view,setView,onAddClient,
             <button onClick={handleSave} className="touch-target flex-1 px-2 py-2 bg-brand hover:bg-brand-hover rounded text-xs transition-colors">Save Backup</button>
             <button onClick={handleLoad} className="touch-target flex-1 px-2 py-2 bg-white/10 hover:bg-white/20 rounded text-xs transition-colors">Load Backup</button>
           </div>
-          {lastSaved&&<p className="text-[10px] text-gray-500 text-center">Last saved: {new Date(lastSaved).toLocaleString()}</p>}
+          {lastSaved&&<p className="text-[10px] text-gray-500 text-center">☁ Synced: {new Date(lastSaved).toLocaleString()}</p>}
         </div>
       </aside>
     </>
@@ -992,18 +1035,35 @@ function App(){
   const [addModalOpen,setAddModalOpen]=useState(false);
   const [newClientName,setNewClientName]=useState('');
 
-  // Auto-save
-  useEffect(()=>{saveData(data)},[data]);
-
-  // 24h auto-backup
+  // Auto-save to cloud whenever data changes
+  const isFirstRender = useRef(true);
   useEffect(()=>{
-    const lastBackup=localStorage.getItem(STORAGE_KEY+'_lastBackup');
-    const now=Date.now();
-    if(!lastBackup||now-Number(lastBackup)>86400000){
-      localStorage.setItem(STORAGE_KEY+'_lastBackup',String(now));
-      const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
-      const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`kailenflow-autobackup-${today()}.json`;a.click();
-    }
+    if(isFirstRender.current){isFirstRender.current=false;return;}
+    _skipNextSnapshot=true;
+    saveData(data);
+  },[data]);
+
+  // Listen for real-time updates from other devices
+  useEffect(()=>{
+    _onFirestoreData=(newData)=>{
+      setData(newData);
+      isFirstRender.current=true; // prevent echo save
+    };
+    // On first load, try to pull from Firestore
+    FIRESTORE_DOC.get().then(snap=>{
+      if(snap.exists){
+        try{
+          const d=JSON.parse(snap.data().json);
+          setData(d);
+          isFirstRender.current=true;
+          localStorage.setItem(STORAGE_KEY,JSON.stringify(d));
+        }catch(e){}
+      } else {
+        // First time ever — push current local data to cloud
+        saveData(data);
+      }
+    }).catch(()=>{});
+    return()=>{_onFirestoreData=null};
   },[]);
 
   const client=data.clients.find(c=>c.id===activeClient);
