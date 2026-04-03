@@ -201,7 +201,7 @@ function makeArborTasks(){
 }
 
 function defaultData(){
-  return {version:1,clients:[
+  return {version:1,prospecting:[],prospectingGoal:50,clients:[
     {
       id:uid(),name:'Rankin Waste Management',website:'rankinwaste.com',gbpUrl:'https://www.google.com/maps/place/Rankin+Waste+Management',
       phone:'(254) 205-6125',address:'175 PR335',city:'Hubbard',state:'TX',primaryCategory:'Waste management service',notes:'',
@@ -246,7 +246,14 @@ let _firestoreReady = false;
 let _onFirestoreData = null; // callback set by App component
 
 function loadData(){
-  try{const d=localStorage.getItem(STORAGE_KEY);return d?JSON.parse(d):defaultData()}catch(e){return defaultData()}
+  try{
+    const d=localStorage.getItem(STORAGE_KEY);
+    if(!d)return defaultData();
+    const parsed=JSON.parse(d);
+    if(!parsed.prospecting)parsed.prospecting=[];
+    if(!parsed.prospectingGoal)parsed.prospectingGoal=50;
+    return parsed;
+  }catch(e){return defaultData()}
 }
 
 function saveData(d){
@@ -265,6 +272,8 @@ FIRESTORE_DOC.onSnapshot(snap=>{
   if(_skipNextSnapshot){_skipNextSnapshot=false;return;}
   try{
     const d=JSON.parse(snap.data().json);
+    if(!d.prospecting)d.prospecting=[];
+    if(!d.prospectingGoal)d.prospectingGoal=50;
     localStorage.setItem(STORAGE_KEY,JSON.stringify(d));
     localStorage.setItem(STORAGE_KEY+'_lastSaved',new Date().toISOString());
     if(_onFirestoreData) _onFirestoreData(d);
@@ -343,6 +352,7 @@ function Sidebar({clients,activeClient,setActiveClient,view,setView,onAddClient,
   const navItems=[
     {key:'today',icon:'📋',label:"Today's Tasks"},
     {key:'overview',icon:'📊',label:'All Clients'},
+    {key:'prospecting',icon:'🎯',label:'Prospecting'},
     {key:'reports',icon:'📄',label:'Reports'}
   ];
 
@@ -1025,6 +1035,497 @@ function AllClientsOverview({data,setActiveClient,setView}){
   );
 }
 
+// ─── Prospecting Tracker ───
+const OUTREACH_CHANNELS=[
+  {key:'cold_sms',label:'Cold SMS',icon:'💬',color:'#6366f1'},
+  {key:'cold_calling',label:'Cold Calling',icon:'📞',color:'#059669'},
+  {key:'email',label:'Email',icon:'📧',color:'#d97706'},
+  {key:'in_person',label:'In-Person',icon:'🤝',color:'#dc2626'},
+  {key:'facebook',label:'Facebook',icon:'📘',color:'#2563eb'}
+];
+
+function ProspectingTracker({data,setData}){
+  const [channel,setChannel]=useState(OUTREACH_CHANNELS[0].key);
+  const [outreaches,setOutreaches]=useState('');
+  const [responses,setResponses]=useState('');
+  const [meetings,setMeetings]=useState('');
+  const [notes,setNotes]=useState('');
+  const [period,setPeriod]=useState('today');
+  const [goalEdit,setGoalEdit]=useState(false);
+  const [goalVal,setGoalVal]=useState(data.prospectingGoal||50);
+
+  const prospecting=data.prospecting||[];
+  const goal=data.prospectingGoal||50;
+
+  // Period helpers
+  const now=new Date();
+  const todayStr=today();
+  const weekStart=(()=>{const d=new Date(now);d.setDate(d.getDate()-d.getDay());return d.toISOString().slice(0,10)})();
+  const monthStart=now.toISOString().slice(0,8)+'01';
+
+  const filterByPeriod=(entries,p)=>{
+    if(p==='today')return entries.filter(e=>e.date===todayStr);
+    if(p==='week')return entries.filter(e=>e.date>=weekStart);
+    if(p==='month')return entries.filter(e=>e.date>=monthStart);
+    return entries;
+  };
+
+  const todayEntries=prospecting.filter(e=>e.date===todayStr);
+  const periodEntries=filterByPeriod(prospecting,period);
+
+  // Stats calculator
+  const calcStats=(entries)=>{
+    const totalOut=entries.reduce((s,e)=>s+(e.outreaches||0),0);
+    const totalResp=entries.reduce((s,e)=>s+(e.responses||0),0);
+    const totalMeet=entries.reduce((s,e)=>s+(e.meetings||0),0);
+    const respRate=totalOut>0?(totalResp/totalOut*100):0;
+    const bookRate=totalOut>0?(totalMeet/totalOut*100):0;
+    return{totalOut,totalResp,totalMeet,respRate,bookRate};
+  };
+
+  const todayStats=calcStats(todayEntries);
+  const periodStats=calcStats(periodEntries);
+
+  // Streak calculation
+  const streak=(()=>{
+    let count=0;
+    let checkDate=new Date(now);
+    // If today has no entries yet, start from yesterday
+    const todayTotal=todayEntries.reduce((s,e)=>s+(e.outreaches||0),0);
+    if(todayTotal<goal)checkDate.setDate(checkDate.getDate()-1);
+    while(true){
+      const ds=checkDate.toISOString().slice(0,10);
+      const dayTotal=prospecting.filter(e=>e.date===ds).reduce((s,e)=>s+(e.outreaches||0),0);
+      if(dayTotal>=goal)count++;
+      else break;
+      checkDate.setDate(checkDate.getDate()-1);
+    }
+    // Add today if met goal
+    if(todayTotal>=goal)count++;
+    return count;
+  })();
+
+  // Goal progress
+  const todayTotal=todayEntries.reduce((s,e)=>s+(e.outreaches||0),0);
+  const goalPct=Math.min(todayTotal/goal*100,100);
+
+  const rateColor=(val,greenThresh,yellowThresh)=>val>=greenThresh?'text-green-500':val>=yellowThresh?'text-yellow-500':'text-red-500';
+
+  const logEntry=()=>{
+    const o=Number(outreaches)||0;
+    if(o===0)return;
+    const entry={id:uid(),date:todayStr,channel,outreaches:o,responses:Number(responses)||0,meetings:Number(meetings)||0,notes:notes.trim(),createdAt:new Date().toISOString()};
+    setData(prev=>{
+      const nd={...prev,prospecting:[...(prev.prospecting||[]),entry]};
+      saveData(nd);return nd;
+    });
+    setOutreaches('');setResponses('');setMeetings('');setNotes('');
+  };
+
+  const saveGoal=()=>{
+    const g=Number(goalVal)||50;
+    setData(prev=>{const nd={...prev,prospectingGoal:g};saveData(nd);return nd});
+    setGoalEdit(false);
+  };
+
+  // Channel breakdown (all time)
+  const channelBreakdown=OUTREACH_CHANNELS.map(ch=>{
+    const entries=prospecting.filter(e=>e.channel===ch.key);
+    const stats=calcStats(entries);
+    return{...ch,...stats};
+  }).sort((a,b)=>b.totalOut-a.totalOut);
+
+  // Today grouped by channel
+  const todayByChannel=OUTREACH_CHANNELS.map(ch=>{
+    const entries=todayEntries.filter(e=>e.channel===ch.key);
+    if(entries.length===0)return null;
+    return{...ch,entries,stats:calcStats(entries)};
+  }).filter(Boolean);
+
+  return(
+    <div className="fade-in">
+      <h2 className="text-2xl font-bold text-brand-dark mb-6 flex items-center gap-2">🎯 Prospecting Tracker</h2>
+
+      {/* Today's Stats */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+        <div className="glass rounded-xl p-4 text-center">
+          <p className="text-3xl font-bold text-brand-dark">{todayStats.totalOut}</p>
+          <p className="text-xs text-gray-500 mt-1">Outreaches Today</p>
+        </div>
+        <div className="glass rounded-xl p-4 text-center">
+          <p className={`text-3xl font-bold ${rateColor(todayStats.respRate,15,5)}`}>{todayStats.respRate.toFixed(1)}%</p>
+          <p className="text-xs text-gray-500 mt-1">Response Rate</p>
+        </div>
+        <div className="glass rounded-xl p-4 text-center">
+          <p className="text-3xl font-bold text-brand-dark">{todayStats.totalMeet}</p>
+          <p className="text-xs text-gray-500 mt-1">Meetings Booked</p>
+        </div>
+        <div className="glass rounded-xl p-4 text-center">
+          <p className={`text-3xl font-bold ${rateColor(todayStats.bookRate,5,2)}`}>{todayStats.bookRate.toFixed(1)}%</p>
+          <p className="text-xs text-gray-500 mt-1">Booking Rate</p>
+        </div>
+      </div>
+
+      {/* Daily Goal + Streak */}
+      <div className="glass rounded-xl p-4 mb-6">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-gray-700">Daily Goal</span>
+            {!goalEdit&&<button onClick={()=>{setGoalVal(goal);setGoalEdit(true)}} className="text-xs text-brand hover:underline">Edit</button>}
+          </div>
+          <div className="flex items-center gap-3">
+            {streak>0&&<span className="text-sm font-bold text-orange-500">🔥 {streak} day streak!</span>}
+            {goalEdit?(
+              <div className="flex items-center gap-1">
+                <input type="number" value={goalVal} onChange={e=>setGoalVal(e.target.value)} className="w-16 px-2 py-1 border rounded text-sm text-center"/>
+                <button onClick={saveGoal} className="px-2 py-1 bg-brand text-white rounded text-xs">Save</button>
+                <button onClick={()=>setGoalEdit(false)} className="px-2 py-1 bg-gray-200 rounded text-xs">Cancel</button>
+              </div>
+            ):(
+              <span className="text-sm font-bold text-brand">{todayTotal}/{goal}</span>
+            )}
+          </div>
+        </div>
+        <div className="w-full h-4 bg-gray-200 rounded-full overflow-hidden">
+          <div className="h-full rounded-full transition-all duration-700" style={{width:`${goalPct}%`,background:goalPct>=100?'#059669':'#C45A30'}}/>
+        </div>
+        {goalPct>=100&&<p className="text-xs text-green-600 font-semibold mt-1 text-center">Goal reached! Keep going!</p>}
+      </div>
+
+      {/* Activity Logger */}
+      <div className="glass rounded-xl p-4 mb-6">
+        <h3 className="font-bold text-brand-dark mb-3">Log Outreach</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-3">
+          {OUTREACH_CHANNELS.map(ch=>(
+            <button key={ch.key} onClick={()=>setChannel(ch.key)}
+              className={`touch-target flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${channel===ch.key?'text-white shadow':'bg-white text-gray-600 hover:bg-gray-100'}`}
+              style={channel===ch.key?{backgroundColor:ch.color}:{}}>
+              <span>{ch.icon}</span><span className="hidden sm:inline">{ch.label}</span>
+            </button>
+          ))}
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+          <input type="number" value={outreaches} onChange={e=>setOutreaches(e.target.value)} placeholder="Outreaches" className="touch-target px-3 py-2 border rounded-lg text-sm"/>
+          <input type="number" value={responses} onChange={e=>setResponses(e.target.value)} placeholder="Responses" className="touch-target px-3 py-2 border rounded-lg text-sm"/>
+          <input type="number" value={meetings} onChange={e=>setMeetings(e.target.value)} placeholder="Meetings" className="touch-target px-3 py-2 border rounded-lg text-sm"/>
+          <input value={notes} onChange={e=>setNotes(e.target.value)} onKeyDown={e=>e.key==='Enter'&&logEntry()} placeholder="Notes (optional)" className="touch-target px-3 py-2 border rounded-lg text-sm"/>
+        </div>
+        <button onClick={logEntry} className="touch-target w-full sm:w-auto px-6 py-2.5 bg-brand text-white rounded-lg hover:bg-brand-hover text-sm font-medium">Log Activity</button>
+      </div>
+
+      {/* Today's Activity by Channel */}
+      {todayByChannel.length>0&&(
+        <div className="glass rounded-xl p-4 mb-6">
+          <h3 className="font-bold text-brand-dark mb-3">Today's Activity</h3>
+          <div className="space-y-3">
+            {todayByChannel.map(ch=>(
+              <div key={ch.key}>
+                <div className="flex items-center gap-2 mb-1">
+                  <span>{ch.icon}</span>
+                  <span className="text-sm font-semibold" style={{color:ch.color}}>{ch.label}</span>
+                  <span className="text-xs text-gray-400">— {ch.stats.totalOut} out, {ch.stats.totalResp} resp, {ch.stats.totalMeet} mtg</span>
+                </div>
+                {ch.entries.map(e=>(
+                  <div key={e.id} className="ml-7 py-1 text-sm text-gray-600 border-l-2 pl-3 mb-1" style={{borderColor:ch.color}}>
+                    {e.outreaches} outreaches, {e.responses} responses, {e.meetings} meetings
+                    {e.notes&&<span className="text-gray-400"> — {e.notes}</span>}
+                    <span className="text-xs text-gray-400 ml-2">{new Date(e.createdAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Period Toggle Stats */}
+      <div className="glass rounded-xl p-4 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="font-bold text-brand-dark">Period Stats</h3>
+          <div className="flex gap-1">
+            {[{k:'week',l:'This Week'},{k:'month',l:'This Month'},{k:'all',l:'All Time'}].map(p=>(
+              <button key={p.k} onClick={()=>setPeriod(p.k)}
+                className={`touch-target px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${period===p.k?'bg-brand text-white':'bg-white text-gray-600 hover:bg-gray-100'}`}>
+                {p.l}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+          <div className="bg-brand-light rounded-lg p-3 text-center">
+            <p className="text-2xl font-bold text-brand-dark">{periodStats.totalOut}</p>
+            <p className="text-xs text-gray-500">Outreaches</p>
+          </div>
+          <div className="bg-brand-light rounded-lg p-3 text-center">
+            <p className={`text-2xl font-bold ${rateColor(periodStats.respRate,15,5)}`}>{periodStats.respRate.toFixed(1)}%</p>
+            <p className="text-xs text-gray-500">Response Rate</p>
+          </div>
+          <div className="bg-brand-light rounded-lg p-3 text-center">
+            <p className="text-2xl font-bold text-brand-dark">{periodStats.totalMeet}</p>
+            <p className="text-xs text-gray-500">Meetings</p>
+          </div>
+          <div className="bg-brand-light rounded-lg p-3 text-center">
+            <p className={`text-2xl font-bold ${rateColor(periodStats.bookRate,5,2)}`}>{periodStats.bookRate.toFixed(1)}%</p>
+            <p className="text-xs text-gray-500">Booking Rate</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Channel Breakdown Table */}
+      <div className="glass rounded-xl p-4">
+        <h3 className="font-bold text-brand-dark mb-3">Channel Breakdown (All Time)</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="border-b text-left">
+              <th className="py-2">Channel</th>
+              <th className="py-2 text-right">Outreaches</th>
+              <th className="py-2 text-right">Responses</th>
+              <th className="py-2 text-right">Resp %</th>
+              <th className="py-2 text-right">Meetings</th>
+              <th className="py-2 text-right">Book %</th>
+            </tr></thead>
+            <tbody>
+              {channelBreakdown.map(ch=>(
+                <tr key={ch.key} className="border-b last:border-0">
+                  <td className="py-2 flex items-center gap-2">
+                    <span>{ch.icon}</span>
+                    <span className="font-medium" style={{color:ch.color}}>{ch.label}</span>
+                  </td>
+                  <td className="py-2 text-right font-bold">{ch.totalOut}</td>
+                  <td className="py-2 text-right">{ch.totalResp}</td>
+                  <td className={`py-2 text-right font-medium ${rateColor(ch.respRate,15,5)}`}>{ch.respRate.toFixed(1)}%</td>
+                  <td className="py-2 text-right">{ch.totalMeet}</td>
+                  <td className={`py-2 text-right font-medium ${rateColor(ch.bookRate,5,2)}`}>{ch.bookRate.toFixed(1)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Analytics Tab ───
+function AnalyticsTab({client,setData}){
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState('');
+  const mobileResult=client.pageSpeed?.mobile||null;
+  const desktopResult=client.pageSpeed?.desktop||null;
+  const lastRun=client.pageSpeed?.lastRun||null;
+
+  const getUrl=()=>{
+    let url=client.website||'';
+    if(!url)return '';
+    if(!url.startsWith('http'))url='https://'+url;
+    return url;
+  };
+
+  const runTest=async()=>{
+    const url=getUrl();
+    if(!url){setError('No website URL set for this client. Add one in Settings.');return;}
+    setLoading(true);setError('');
+    try{
+      const [mobileRes,desktopRes]=await Promise.all([
+        fetch(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=mobile`).then(r=>r.json()),
+        fetch(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=desktop`).then(r=>r.json())
+      ]);
+      if(mobileRes.error){throw new Error(mobileRes.error.message||'API error');}
+      const extractData=(res)=>{
+        const lh=res.lighthouseResult||{};
+        const cats=lh.categories||{};
+        const audits=lh.audits||{};
+        const perf=cats.performance||{};
+        // Core Web Vitals
+        const lcp=audits['largest-contentful-paint']?.numericValue/1000||0;
+        const inp=audits['interaction-to-next-paint']?.numericValue||audits['max-potential-fid']?.numericValue||0;
+        const cls=audits['cumulative-layout-shift']?.numericValue||0;
+        // Opportunities
+        const opps=Object.values(audits).filter(a=>a.score!==null&&a.score<1&&a.details&&a.details.type==='opportunity').slice(0,8).map(a=>({title:a.title,description:a.description,savings:a.details?.overallSavingsMs||0}));
+        return{score:Math.round((perf.score||0)*100),lcp,inp,cls,opportunities:opps};
+      };
+      const mobile=extractData(mobileRes);
+      const desktop=extractData(desktopRes);
+      setData(prev=>{
+        const nd={...prev,clients:prev.clients.map(c=>{
+          if(c.id!==client.id)return c;
+          return{...c,pageSpeed:{mobile,desktop,lastRun:new Date().toISOString()}};
+        })};
+        saveData(nd);return nd;
+      });
+    }catch(e){
+      setError('Speed test failed: '+(e.message||'Unknown error'));
+    }finally{setLoading(false)}
+  };
+
+  const ScoreCircle=({score,label})=>{
+    const color=score>=90?'#059669':score>=50?'#d97706':'#dc2626';
+    const r=40;const c=2*Math.PI*r;const offset=c-(score/100)*c;
+    return(
+      <div className="flex flex-col items-center">
+        <svg width={120} height={120} viewBox="0 0 100 100" className="transform -rotate-90">
+          <circle cx="50" cy="50" r={r} fill="none" stroke="#e5e7eb" strokeWidth="8"/>
+          <circle cx="50" cy="50" r={r} fill="none" stroke={color} strokeWidth="8" strokeLinecap="round"
+            strokeDasharray={c} strokeDashoffset={offset} className="ring-animate transition-all duration-700"/>
+        </svg>
+        <div className="absolute flex flex-col items-center justify-center" style={{width:120,height:120}}>
+          <span className="text-2xl font-bold" style={{color}}>{score}</span>
+        </div>
+        <span className="text-sm font-semibold text-gray-700 mt-1">{label}</span>
+      </div>
+    );
+  };
+
+  const vitalColor=(metric,val)=>{
+    if(metric==='lcp')return val<2.5?'text-green-600':val<4?'text-yellow-600':'text-red-600';
+    if(metric==='inp')return val<200?'text-green-600':val<500?'text-yellow-600':'text-red-600';
+    if(metric==='cls')return val<0.1?'text-green-600':val<0.25?'text-yellow-600':'text-red-600';
+    return'text-gray-600';
+  };
+  const vitalBg=(metric,val)=>{
+    if(metric==='lcp')return val<2.5?'bg-green-50':val<4?'bg-yellow-50':'bg-red-50';
+    if(metric==='inp')return val<200?'bg-green-50':val<500?'bg-yellow-50':'bg-red-50';
+    if(metric==='cls')return val<0.1?'bg-green-50':val<0.25?'bg-yellow-50':'bg-red-50';
+    return'bg-gray-50';
+  };
+
+  return(
+    <div className="fade-in">
+      <h3 className="text-xl font-bold text-brand-dark mb-6 flex items-center gap-2">🌐 Website Analytics</h3>
+
+      {/* Page Speed Section */}
+      <div className="glass rounded-xl p-4 mb-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+          <div>
+            <h4 className="font-bold text-brand-dark">Page Speed Insights</h4>
+            {lastRun&&<p className="text-xs text-gray-400">Last run: {fmt(lastRun)}</p>}
+            {getUrl()&&<p className="text-xs text-gray-500 mt-0.5">{getUrl()}</p>}
+          </div>
+          <button onClick={runTest} disabled={loading}
+            className={`touch-target px-5 py-2.5 rounded-lg text-sm font-medium transition-colors ${loading?'bg-gray-300 text-gray-500 cursor-wait':'bg-brand text-white hover:bg-brand-hover'}`}>
+            {loading?'Running Test...':'Run Speed Test'}
+          </button>
+        </div>
+
+        {error&&<div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg p-3 mb-4">{error}</div>}
+
+        {(mobileResult||desktopResult)?(
+          <>
+            {/* Score Circles */}
+            <div className="flex justify-center gap-12 mb-6">
+              {mobileResult&&<div className="relative"><ScoreCircle score={mobileResult.score} label="Mobile"/></div>}
+              {desktopResult&&<div className="relative"><ScoreCircle score={desktopResult.score} label="Desktop"/></div>}
+            </div>
+
+            {/* Core Web Vitals */}
+            <h4 className="font-semibold text-brand-dark mb-3">Core Web Vitals</h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+              {['mobile','desktop'].map(strat=>{
+                const res=strat==='mobile'?mobileResult:desktopResult;
+                if(!res)return null;
+                return(
+                  <div key={strat} className="space-y-2">
+                    <p className="text-sm font-medium text-gray-600 capitalize">{strat}</p>
+                    <div className={`rounded-lg p-3 ${vitalBg('lcp',res.lcp)}`}>
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-700">LCP</span>
+                        <span className={`text-lg font-bold ${vitalColor('lcp',res.lcp)}`}>{res.lcp.toFixed(2)}s</span>
+                      </div>
+                    </div>
+                    <div className={`rounded-lg p-3 ${vitalBg('inp',res.inp)}`}>
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-700">INP/FID</span>
+                        <span className={`text-lg font-bold ${vitalColor('inp',res.inp)}`}>{Math.round(res.inp)}ms</span>
+                      </div>
+                    </div>
+                    <div className={`rounded-lg p-3 ${vitalBg('cls',res.cls)}`}>
+                      <div className="flex justify-between items-center">
+                        <span className="text-sm text-gray-700">CLS</span>
+                        <span className={`text-lg font-bold ${vitalColor('cls',res.cls)}`}>{res.cls.toFixed(3)}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Opportunities */}
+            {mobileResult.opportunities&&mobileResult.opportunities.length>0&&(
+              <div className="mb-6">
+                <h4 className="font-semibold text-brand-dark mb-3">Top Opportunities (Mobile)</h4>
+                <div className="space-y-2">
+                  {mobileResult.opportunities.map((o,i)=>(
+                    <div key={i} className="bg-amber-50 rounded-lg p-3">
+                      <p className="text-sm font-medium text-gray-800">{o.title}</p>
+                      {o.savings>0&&<p className="text-xs text-amber-700 mt-0.5">Potential savings: ~{(o.savings/1000).toFixed(1)}s</p>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        ):(
+          <div className="text-center py-8 text-gray-400">
+            <p className="text-4xl mb-2">🚀</p>
+            <p className="text-sm">Run a speed test to see your performance scores and Core Web Vitals.</p>
+          </div>
+        )}
+      </div>
+
+      {/* GSC Placeholder */}
+      <div className="glass rounded-xl p-4">
+        <div className="flex items-center justify-between mb-4">
+          <h4 className="font-bold text-brand-dark">Google Search Console</h4>
+          <span className="text-xs bg-gray-200 text-gray-600 px-2 py-1 rounded-full font-medium">Coming Soon</span>
+        </div>
+        <div className="bg-gray-50 rounded-lg p-6 border-2 border-dashed border-gray-200 text-center mb-4">
+          <p className="text-3xl mb-2">📊</p>
+          <p className="text-sm font-medium text-gray-700 mb-1">Connect Google Search Console</p>
+          <p className="text-xs text-gray-500 mb-3">View clicks, impressions, CTR, and keyword rankings directly inside KailenFlow.</p>
+          <button disabled className="touch-target px-5 py-2.5 bg-gray-300 text-gray-500 rounded-lg text-sm font-medium cursor-not-allowed">Connect GSC Account</button>
+        </div>
+
+        {/* Mock stat cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4 opacity-40">
+          <div className="bg-blue-50 rounded-lg p-3 text-center">
+            <p className="text-2xl font-bold text-blue-600">—</p>
+            <p className="text-xs text-gray-500">Total Clicks</p>
+          </div>
+          <div className="bg-purple-50 rounded-lg p-3 text-center">
+            <p className="text-2xl font-bold text-purple-600">—</p>
+            <p className="text-xs text-gray-500">Impressions</p>
+          </div>
+          <div className="bg-green-50 rounded-lg p-3 text-center">
+            <p className="text-2xl font-bold text-green-600">—</p>
+            <p className="text-xs text-gray-500">Avg CTR</p>
+          </div>
+          <div className="bg-amber-50 rounded-lg p-3 text-center">
+            <p className="text-2xl font-bold text-amber-600">—</p>
+            <p className="text-xs text-gray-500">Avg Position</p>
+          </div>
+        </div>
+
+        {/* Mock tables */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 opacity-40">
+          <div className="bg-gray-50 rounded-lg p-4">
+            <h5 className="text-sm font-semibold text-gray-600 mb-2">Top Pages</h5>
+            <div className="space-y-2">
+              {[1,2,3].map(i=><div key={i} className="h-4 bg-gray-200 rounded w-full"/>)}
+            </div>
+          </div>
+          <div className="bg-gray-50 rounded-lg p-4">
+            <h5 className="text-sm font-semibold text-gray-600 mb-2">Top Queries</h5>
+            <div className="space-y-2">
+              {[1,2,3].map(i=><div key={i} className="h-4 bg-gray-200 rounded w-full"/>)}
+            </div>
+          </div>
+        </div>
+        <p className="text-xs text-gray-400 text-center mt-3">GSC integration coming soon — data will appear here once connected.</p>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main App ───
 function App(){
   const [data,setData]=useState(loadData);
@@ -1081,6 +1582,7 @@ function App(){
     {key:'tasks',label:'Tasks',icon:'✓'},
     {key:'activity',label:'Activity',icon:'📝'},
     {key:'rankings',label:'Rankings',icon:'📈'},
+    {key:'analytics',label:'Analytics',icon:'🌐'},
     {key:'settings',label:'Settings',icon:'⚙'},
     {key:'reports',label:'Reports',icon:'📄'}
   ];
@@ -1110,6 +1612,7 @@ function App(){
         <div className="p-4 sm:p-6 max-w-6xl mx-auto">
           {view==='today'&&<TodaysTasks data={data} setData={setData}/>}
           {view==='overview'&&<AllClientsOverview data={data} setActiveClient={setActiveClient} setView={()=>setView('dashboard')}/>}
+          {view==='prospecting'&&<ProspectingTracker data={data} setData={setData}/>}
           {view==='reports'&&<ReportsTab data={data}/>}
           {view==='dashboard'&&client&&(
             <>
@@ -1126,6 +1629,7 @@ function App(){
               {tab==='tasks'&&<TasksTab client={client} setData={setData}/>}
               {tab==='activity'&&<ActivityLog client={client} setData={setData}/>}
               {tab==='rankings'&&<RankingsTab client={client} setData={setData}/>}
+              {tab==='analytics'&&<AnalyticsTab client={client} setData={setData}/>}
               {tab==='settings'&&<SettingsTab client={client} setData={setData}/>}
               {tab==='reports'&&<ReportsTab data={data}/>}
             </>
@@ -1135,7 +1639,7 @@ function App(){
         {/* Mobile bottom nav */}
         <div className="no-print fixed bottom-0 left-0 right-0 lg:hidden bg-white border-t shadow-lg z-30">
           <div className="flex">
-            {[{key:'today',icon:'📋',label:'Today'},{key:'dashboard',icon:'📊',label:'Client'},{key:'overview',icon:'👥',label:'All'},{key:'reports',icon:'📄',label:'Reports'}].map(n=>(
+            {[{key:'today',icon:'📋',label:'Today'},{key:'dashboard',icon:'📊',label:'Client'},{key:'prospecting',icon:'🎯',label:'Prospect'},{key:'overview',icon:'👥',label:'All'},{key:'reports',icon:'📄',label:'Reports'}].map(n=>(
               <button key={n.key} onClick={()=>{setView(n.key);if(n.key==='dashboard'&&!client&&data.clients[0])setActiveClient(data.clients[0].id)}}
                 className={`flex-1 flex flex-col items-center py-2 text-xs ${view===n.key?'text-brand font-bold':'text-gray-500'}`}>
                 <span className="text-lg">{n.icon}</span>{n.label}
