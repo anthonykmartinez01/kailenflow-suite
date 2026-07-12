@@ -618,6 +618,9 @@ function Sidebar({clients,activeClient,setActiveClient,view,setView,onAddClient,
       {key:'indexing',icon:'travel_explore',label:'Indexing'},
       {key:'reports',icon:'description',label:'Reports'},
     ]},
+    {label:'Tools', items:[
+      {key:'prompts',icon:'auto_awesome',label:'Prompts'},
+    ]},
   ];
 
   return(
@@ -1895,6 +1898,146 @@ function ReportsTab({data,initialClientId}){
         ):null})()}
         {monthActivities.length>0&&(<div><h3 className="font-bold text-brand-dark mb-2">Activity This Month</h3><ul className="space-y-1">{monthActivities.slice(0,15).map(a=><li key={a.id} className="text-sm text-deep-obsidian/70 flex items-start gap-2"><span className="text-brand mt-0.5">•</span>{a.text}</li>)}</ul></div>)}
       </div>
+    </div>
+  );
+}
+
+// ─── Prompts Library ───
+// A simple personal store for reusable AI prompts — name + category + the
+// prompt text itself, global to the agency (not tied to any client), same
+// data.X-array-on-the-shared-document pattern as data.prospects etc.
+function PromptEditModal({open,onClose,onSave,editing}){
+  const [name,setName]=useState('');
+  const [category,setCategory]=useState('');
+  const [text,setText]=useState('');
+  useEffect(()=>{
+    if(open){setName(editing?.name||'');setCategory(editing?.category||'');setText(editing?.text||'')}
+  },[open,editing]);
+  const save=()=>{
+    if(!name.trim()||!text.trim())return;
+    onSave({id:editing?.id||uid(),name:name.trim(),category:category.trim(),text,createdAt:editing?.createdAt||Date.now(),updatedAt:Date.now()});
+    onClose();
+  };
+  return(
+    <Modal open={open} onClose={onClose} title={editing?'Edit Prompt':'Add Prompt'} wide>
+      <div className="space-y-3 font-manrope">
+        <div>
+          <label className="text-sm font-medium text-deep-obsidian/70">Name</label>
+          <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. GBP Post Generator" className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/>
+        </div>
+        <div>
+          <label className="text-sm font-medium text-deep-obsidian/70">Category</label>
+          <input value={category} onChange={e=>setCategory(e.target.value)} placeholder="e.g. GBP posts, blog content, cold call script" className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/>
+        </div>
+        <div>
+          <label className="text-sm font-medium text-deep-obsidian/70">Prompt text</label>
+          <textarea value={text} onChange={e=>setText(e.target.value)} rows="10" placeholder="Paste the full prompt here..." className="w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none font-mono text-sm"/>
+        </div>
+        <button onClick={save} disabled={!name.trim()||!text.trim()} className="touch-target w-full py-2.5 bg-brand text-white rounded-xl hover:bg-brand-hover font-medium shadow-lg shadow-brand/20 disabled:opacity-50">{editing?'Save Changes':'Add Prompt'}</button>
+      </div>
+    </Modal>
+  );
+}
+
+function PromptCard({prompt,onEdit,onDelete}){
+  const [copied,setCopied]=useState(false);
+  const [expanded,setExpanded]=useState(false);
+  const copy=()=>{navigator.clipboard.writeText(prompt.text).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),1500)})};
+  const preview=prompt.text.length>220&&!expanded?prompt.text.slice(0,220)+'…':prompt.text;
+  return(
+    <div className="stitch-glass-card rounded-[20px] p-5">
+      <div className="flex items-start justify-between gap-3 mb-2">
+        <div className="min-w-0">
+          <p className="font-bold text-brand-dark truncate">{prompt.name}</p>
+          {prompt.category&&<span className="inline-block mt-1 text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-brand/10 text-brand-dark">{prompt.category}</span>}
+        </div>
+        <div className="flex items-center gap-1 flex-shrink-0">
+          <button onClick={copy} className="touch-target flex items-center justify-center w-8 h-8 rounded-full hover:bg-black/5 text-muted-stone" title="Copy prompt">
+            <span className="material-symbols-outlined text-[18px]">{copied?'check':'content_copy'}</span>
+          </button>
+          <button onClick={()=>onEdit(prompt)} className="touch-target flex items-center justify-center w-8 h-8 rounded-full hover:bg-black/5 text-muted-stone" title="Edit"><span className="material-symbols-outlined text-[18px]">edit</span></button>
+          <button onClick={()=>{if(confirm('Delete this prompt?'))onDelete(prompt.id)}} className="touch-target flex items-center justify-center w-8 h-8 rounded-full hover:bg-black/5 text-red-500" title="Delete"><span className="material-symbols-outlined text-[18px]">delete</span></button>
+        </div>
+      </div>
+      <pre className="whitespace-pre-wrap font-mono text-xs text-deep-obsidian/75 bg-black/[0.03] rounded-xl p-3 max-h-[400px] overflow-y-auto">{preview}</pre>
+      {prompt.text.length>220&&(
+        <button onClick={()=>setExpanded(e=>!e)} className="text-xs text-brand hover:underline mt-1">{expanded?'Show less':'Show more'}</button>
+      )}
+    </div>
+  );
+}
+
+function PromptsLibrary({data,setData}){
+  const [addOpen,setAddOpen]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const [search,setSearch]=useState('');
+  const [categoryFilter,setCategoryFilter]=useState('all');
+  const prompts=data.prompts||[];
+
+  const savePrompt=(entry)=>{
+    setData(prev=>{
+      const list=prev.prompts||[];
+      const exists=list.some(p=>p.id===entry.id);
+      const next=exists?list.map(p=>p.id===entry.id?entry:p):[entry,...list];
+      const nd={...prev,prompts:next};
+      saveData(nd);
+      return nd;
+    });
+  };
+  const deletePrompt=(id)=>{
+    setData(prev=>{const nd={...prev,prompts:(prev.prompts||[]).filter(p=>p.id!==id)};saveData(nd);return nd});
+  };
+
+  const categories=[...new Set(prompts.map(p=>p.category).filter(Boolean))].sort();
+  const filtered=prompts.filter(p=>{
+    if(categoryFilter!=='all'&&p.category!==categoryFilter)return false;
+    if(search.trim()){
+      const q=search.toLowerCase();
+      if(!p.name.toLowerCase().includes(q)&&!p.text.toLowerCase().includes(q)&&!(p.category||'').toLowerCase().includes(q))return false;
+    }
+    return true;
+  });
+
+  return(
+    <div className="fade-in font-manrope">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
+        <div>
+          <h3 className="text-xl font-bold text-brand-dark">Prompts</h3>
+          <p className="text-sm text-muted-stone">Your personal library of reusable AI prompts</p>
+        </div>
+        <button onClick={()=>{setEditing(null);setAddOpen(true)}} className="touch-target px-4 py-2 bg-brand text-white rounded-xl text-sm font-medium hover:bg-brand-hover shadow-lg shadow-brand/20 flex items-center gap-1.5"><span className="material-symbols-outlined text-[18px]">add</span>Add Prompt</button>
+      </div>
+
+      {prompts.length===0?(
+        <div className="stitch-glass-card rounded-[24px] p-8 text-center">
+          <span className="material-symbols-outlined text-4xl text-brand mb-2">auto_awesome</span>
+          <h4 className="font-bold text-brand-dark">No prompts saved yet</h4>
+          <p className="text-sm text-muted-stone mt-1">Add your first prompt to start building your library</p>
+        </div>
+      ):(
+        <>
+          <div className="flex items-center gap-2 flex-wrap mb-4">
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search prompts..." className="touch-target px-3 py-2 border border-glass-border rounded-xl text-sm focus:ring-1 focus:ring-brand focus:outline-none flex-1 min-w-[180px]"/>
+            {categories.length>0&&(
+              <select value={categoryFilter} onChange={e=>setCategoryFilter(e.target.value)} className="touch-target px-3 py-2 border border-glass-border rounded-xl text-sm focus:ring-1 focus:ring-brand focus:outline-none">
+                <option value="all">All categories</option>
+                {categories.map(c=><option key={c} value={c}>{c}</option>)}
+              </select>
+            )}
+          </div>
+          {filtered.length===0?(
+            <p className="text-sm text-muted-stone text-center py-8">No prompts match your search.</p>
+          ):(
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {filtered.map(p=>(
+                <PromptCard key={p.id} prompt={p} onEdit={pr=>{setEditing(pr);setAddOpen(true)}} onDelete={deletePrompt}/>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      <PromptEditModal open={addOpen} onClose={()=>{setAddOpen(false);setEditing(null)}} onSave={savePrompt} editing={editing}/>
     </div>
   );
 }
@@ -8794,6 +8937,7 @@ function AuthenticatedApp(){
           {view==='calendar'&&<CalendarView data={data} setData={setData}/>}
           {view==='overview'&&<AllClientsOverview data={data} setActiveClient={setActiveClient} setView={()=>setView('dashboard')}/>}
           {view==='reports'&&<ReportsTab data={data}/>}
+          {view==='prompts'&&<PromptsLibrary data={data} setData={setData}/>}
           {view==='eod'&&<EndOfDay data={data} setData={setData}/>}
           {view==='leadfinder'&&<LeadFinder data={data} setData={setData}/>}
           {view==='callcoach'&&<CallCoach data={data} setData={setData}/>}
