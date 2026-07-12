@@ -897,11 +897,35 @@ function ClientDashboard({client,data,setData,setTab}){
   const latestLiveMap=(c.rankMaps||[]).filter(m=>m.generatedBy==='live'&&m.status==='complete').sort((a,b)=>(b.completedAt||0)-(a.completedAt||0))[0];
   const avatarLetter=(c.name||'?').charAt(0).toUpperCase();
 
+  // Pull the client's website hero image (its own og:image) once per
+  // client and cache it — undefined = never checked yet (will retry next
+  // visit), '' = checked, none found (stop retrying), a URL = found.
+  const [heroImage,setHeroImage]=useState(c.heroImage||null);
+  const heroFetchedForRef=useRef(null);
+  useEffect(()=>{
+    if(heroFetchedForRef.current===c.id)return;
+    heroFetchedForRef.current=c.id;
+    setHeroImage(c.heroImage||null);
+    if(c.heroImage!==undefined||!c.website)return;
+    (async()=>{
+      try{
+        const r=await fetch('/api/fetch-hero-image',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({website:c.website})});
+        const j=await r.json();
+        const found=j.image||'';
+        if(found)setHeroImage(found);
+        if(setData){
+          setData(prev=>{const nd={...prev,clients:prev.clients.map(cl=>cl.id===c.id?{...cl,heroImage:found}:cl)};saveData(nd);return nd});
+        }
+      }catch(e){/* silent — heroImage stays undefined, so it just retries next visit */}
+    })();
+  },[c.id,c.website]);
+
   return(
     <div className="fade-in font-manrope space-y-4">
       {/* Header: identity + latest heat map */}
-      <div className="stitch-glass-card rounded-[24px] overflow-hidden">
-        <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px]">
+      <div className="rounded-[24px] overflow-hidden relative border border-glass-border" style={heroImage?{backgroundImage:`url("${heroImage}")`,backgroundSize:'cover',backgroundPosition:'center'}:{background:'rgba(255,255,255,0.45)',backdropFilter:'blur(24px)'}}>
+        {heroImage&&<div className="absolute inset-0" style={{background:'linear-gradient(to right, rgba(242,236,228,0.97) 0%, rgba(242,236,228,0.92) 30%, rgba(242,236,228,0.6) 60%, rgba(242,236,228,0.3) 100%)'}}/>}
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] relative">
           <div className="p-6">
             <div className="flex items-start gap-4">
               <div className="w-16 h-16 rounded-full bg-brand/15 text-brand flex items-center justify-center font-bold text-2xl flex-shrink-0">{avatarLetter}</div>
@@ -939,7 +963,7 @@ function ClientDashboard({client,data,setData,setTab}){
             {latestLiveMap?(
               <LeafletHeatMap points={latestLiveMap.grid} centerLat={latestLiveMap.centerLat} centerLng={latestLiveMap.centerLng} businessName={c.name} address={c.address} keyword={latestLiveMap.keyword} gridSize={latestLiveMap.gridSize} radiusMiles={latestLiveMap.radiusMiles}/>
             ):(
-              <div className="h-full min-h-[220px] flex flex-col items-center justify-center text-center p-6 bg-black/[0.02]">
+              <div className="h-full min-h-[220px] flex flex-col items-center justify-center text-center p-6 bg-warm-sand/90">
                 <span className="material-symbols-outlined text-3xl text-muted-stone mb-2">map</span>
                 <p className="text-sm text-muted-stone">No rank map yet</p>
                 {setTab&&<button onClick={()=>setTab('rankings')} className="text-xs text-brand hover:underline mt-1">Generate one in Rankings</button>}
