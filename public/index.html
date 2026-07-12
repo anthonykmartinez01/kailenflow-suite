@@ -636,20 +636,11 @@ function Sidebar({clients,activeClient,setActiveClient,view,setView,onAddClient,
             <p className="text-[10px] font-semibold text-muted-stone uppercase tracking-widest mt-1">Local SEO Suite</p>
           </div>
         </div>
-        <nav className="px-2 pb-2 border-b border-glass-border">
-          {navGroups.map(g=>(
-            <div key={g.label} className="mb-2">
-              <div className="px-3 pt-2 pb-1 text-[10px] font-semibold text-muted-stone uppercase tracking-widest">{g.label}</div>
-              {g.items.map(n=>(
-                <button key={n.key} onClick={()=>{setView(n.key);setSidebarOpen(false)}}
-                  className={`touch-target w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm mb-0.5 transition-all duration-200 ${view===n.key?'bg-brand text-white shadow-md shadow-brand/20':'text-deep-obsidian/70 hover:bg-black/5 hover:translate-x-1'}`}>
-                  <span className="material-symbols-outlined text-[20px]">{n.icon}</span><span className="flex-1 text-left">{n.label}</span>
-                  {n.badge&&<span className="bg-red-500 text-white text-[10px] w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0">{n.badge}</span>}
-                </button>
-              ))}
-            </div>
-          ))}
-        </nav>
+        {/* Single shared scroll region, Clients FIRST — on a short mobile
+        viewport the drawer used to put ~11 nav links ahead of the client
+        list, so a client's own clients were scrolled off-screen the moment
+        the drawer opened. Clients now render first so they're the first
+        thing visible, no scrolling required. */}
         <div className="flex-1 overflow-y-auto p-2">
           <div className="px-3 pt-2 pb-1 text-[10px] font-semibold text-muted-stone uppercase tracking-widest">Clients</div>
           {clients.map(c=>(
@@ -659,6 +650,20 @@ function Sidebar({clients,activeClient,setActiveClient,view,setView,onAddClient,
               <span className="truncate">{c.name}</span>
             </button>
           ))}
+          <nav className="pt-2 mt-2 border-t border-glass-border">
+            {navGroups.map(g=>(
+              <div key={g.label} className="mb-2">
+                <div className="px-3 pt-2 pb-1 text-[10px] font-semibold text-muted-stone uppercase tracking-widest">{g.label}</div>
+                {g.items.map(n=>(
+                  <button key={n.key} onClick={()=>{setView(n.key);setSidebarOpen(false)}}
+                    className={`touch-target w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm mb-0.5 transition-all duration-200 ${view===n.key?'bg-brand text-white shadow-md shadow-brand/20':'text-deep-obsidian/70 hover:bg-black/5 hover:translate-x-1'}`}>
+                    <span className="material-symbols-outlined text-[20px]">{n.icon}</span><span className="flex-1 text-left">{n.label}</span>
+                    {n.badge&&<span className="bg-red-500 text-white text-[10px] w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0">{n.badge}</span>}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </nav>
         </div>
         <div className="p-3 border-t border-glass-border space-y-3">
           <button onClick={onAddClient} className="w-full py-3.5 rounded-xl bg-brand text-white text-xs font-semibold uppercase tracking-widest shadow-xl shadow-brand/20 hover:opacity-90 active:scale-95 transition-all">
@@ -3356,8 +3361,8 @@ function ProspectPipeline({data,setData}){
                             {secondary&&<p className="text-[10px] text-muted-stone truncate mt-0.5">{secondary}</p>}
                           </div>
                           <div className="flex gap-0 flex-shrink-0" onMouseDown={e=>e.stopPropagation()}>
-                            <button onClick={()=>startEdit(p)} className="w-5 h-5 flex items-center justify-center rounded hover:bg-black/5 text-[10px]" title="Edit">✏</button>
-                            <button onClick={()=>deleteProspect(p.id)} className="w-5 h-5 flex items-center justify-center rounded hover:bg-red-50 text-[10px] text-red-500" title="Delete">✕</button>
+                            <button onClick={()=>startEdit(p)} className="w-8 h-8 flex items-center justify-center rounded hover:bg-black/5 text-xs" title="Edit">✏</button>
+                            <button onClick={()=>deleteProspect(p.id)} className="w-8 h-8 flex items-center justify-center rounded hover:bg-red-50 text-xs text-red-500" title="Delete">✕</button>
                           </div>
                         </div>
                         <div className="space-y-0.5 mt-1 text-[10px] text-muted-stone">
@@ -8946,11 +8951,20 @@ function AuthenticatedApp(){
 
       <main className="flex-1 lg:ml-[260px] min-h-screen pb-20 lg:pb-6">
         <div className="no-print font-manrope sticky top-0 z-30 lg:hidden bg-glass-surface backdrop-blur-xl border-b border-glass-border px-4 py-3 flex items-center gap-3">
-          <button onClick={()=>setSidebarOpen(true)} className="touch-target w-10 h-10 flex items-center justify-center rounded-lg hover:bg-black/5">
+          <button onClick={()=>setSidebarOpen(true)} className="touch-target w-10 h-10 flex items-center justify-center rounded-lg hover:bg-black/5 flex-shrink-0">
             <span className="material-symbols-outlined text-deep-obsidian">menu</span>
           </button>
-          <h1 className="text-lg font-bold text-brand truncate">KailenFlow Suite</h1>
-          {pendingCount>0&&<span className="bg-red-500 text-white text-[10px] w-5 h-5 rounded-full flex items-center justify-center">{pendingCount}</span>}
+          {/* Always-visible client switcher — previously the ONLY way to jump
+          to a specific client on mobile was opening the hamburger drawer and
+          scrolling past every nav link to reach the client list at the
+          bottom. A native <select> here means switching clients never
+          requires opening the drawer at all. */}
+          <select value={data.clients.some(c=>c.id===activeClient)?activeClient:''} onChange={e=>{if(e.target.value){setActiveClient(e.target.value);setView('dashboard')}}}
+            className="touch-target flex-1 min-w-0 px-2 py-2 bg-white/60 border border-glass-border rounded-lg text-sm font-medium text-brand-dark focus:ring-1 focus:ring-brand focus:outline-none">
+            <option value="">Select a client…</option>
+            {data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          {pendingCount>0&&<span className="bg-red-500 text-white text-[10px] w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0">{pendingCount}</span>}
         </div>
 
         <div className="p-4 sm:p-6 max-w-[1600px] mx-auto">
