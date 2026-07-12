@@ -3,11 +3,19 @@ import { isAuthed, unauthorized } from "../../shared/auth.mts";
 
 // Counts website form submissions for ONE client's GoHighLevel sub-account
 // (client.ghlLocationId, set in Settings) over a trailing window — powers
-// the Dashboard's "Website Leads" card. Uses the same agency-wide
-// GHL_API_TOKEN as send-to-ghl/eod-report/call-coach; those all pass
-// locationId explicitly in the request already, so the token is agency-
-// scoped and can read any client's location this way, not just the one
-// fixed GHL_LOCATION_ID used for prospecting.
+// the Dashboard's "Website Leads" card.
+//
+// IMPORTANT: unlike send-to-ghl/eod-report/call-coach (which all share the
+// one agency-wide GHL_API_TOKEN), GHL's forms.readonly scope is classified
+// as a "Sub-Account" scope in their own docs — it is NOT available on an
+// Agency-level Private Integration/app no matter what's granted, confirmed
+// by testing (agency token → 401 "not authorized for this scope"). So this
+// endpoint requires a PER-CLIENT token generated from inside that client's
+// own GHL sub-account (client.ghlPrivateToken, set in Settings), passed in
+// the request body. Falls back to GHL_API_TOKEN only if no per-client
+// token is provided, purely so a client whose own GHL happens to BE the
+// agency's own location still works — for every other client this fallback
+// will just hit the same 401 the agency-wide token always gets for Forms.
 
 const GHL_BASE = "https://services.leadconnectorhq.com";
 const GHL_VERSION = "2021-07-28";
@@ -20,13 +28,13 @@ export default async (req: Request, _ctx: Context) => {
   if (!(await isAuthed(req))) return unauthorized();
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
 
-  const token = Netlify.env.get("GHL_API_TOKEN");
-  if (!token) return json({ error: "Server is missing GHL_API_TOKEN. Add it in Netlify env vars." }, 500);
-
   let body: any;
   try { body = await req.json(); } catch { return json({ error: "Invalid JSON body" }, 400); }
   const locationId: string = (body.locationId || "").toString().trim();
   if (!locationId) return json({ error: "Missing locationId" }, 400);
+
+  const token: string = (body.token || "").toString().trim() || Netlify.env.get("GHL_API_TOKEN") || "";
+  if (!token) return json({ error: "No GHL Private Integration token set for this client, and no fallback GHL_API_TOKEN configured on the server." }, 500);
 
   const days = Number(body.days) || 28;
   const end = new Date();

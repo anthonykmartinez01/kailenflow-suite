@@ -805,11 +805,13 @@ function GHLLeadsCard({client,setData,setTab}){
   const [leadsData,setLeadsData]=useState(client.ghlSummary||null);
   const fetchedForRef=useRef(null);
 
+  const ready=!!(client.ghlLocationId&&client.ghlPrivateToken);
+
   const fetchLeads=async()=>{
-    if(!client.ghlLocationId)return;
+    if(!ready)return;
     setState('loading');setError('');setErrorDetail('');
     try{
-      const r=await fetch('/api/ghl-leads',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({locationId:client.ghlLocationId,days:28})});
+      const r=await fetch('/api/ghl-leads',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({locationId:client.ghlLocationId,token:client.ghlPrivateToken,days:28})});
       const j=await r.json();
       if(!r.ok||j.error){setState('error');setError(j.error||'Failed to load leads');setErrorDetail(j.detail||'');return}
       const summary={totalLeads:j.totalLeads,windowDays:j.windowDays,fetchedAt:Date.now()};
@@ -825,32 +827,32 @@ function GHLLeadsCard({client,setData,setTab}){
     if(fetchedForRef.current===client.id)return;
     fetchedForRef.current=client.id;
     setLeadsData(client.ghlSummary||null);
-    if(client.ghlLocationId)fetchLeads();
-  },[client.id,client.ghlLocationId]);
+    if(ready)fetchLeads();
+  },[client.id,client.ghlLocationId,client.ghlPrivateToken]);
 
   return(
     <div className="stitch-glass-card rounded-[24px] p-6">
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-bold text-brand-dark">Website Leads</h3>
-        {client.ghlLocationId&&<button onClick={fetchLeads} disabled={state==='loading'} className="text-xs text-brand hover:underline disabled:opacity-50">Refresh</button>}
+        {ready&&<button onClick={fetchLeads} disabled={state==='loading'} className="text-xs text-brand hover:underline disabled:opacity-50">Refresh</button>}
       </div>
-      {!client.ghlLocationId&&(
+      {!ready&&(
         <div className="text-center py-6">
-          <p className="text-sm text-muted-stone mb-2">No GHL location connected</p>
-          {setTab&&<button onClick={()=>setTab('settings')} className="text-xs text-brand hover:underline">Add GHL Location ID</button>}
+          <p className="text-sm text-muted-stone mb-2">{client.ghlLocationId?'No GHL Private Integration token set for this client':'No GHL location connected'}</p>
+          {setTab&&<button onClick={()=>setTab('settings')} className="text-xs text-brand hover:underline">Set up in Settings</button>}
         </div>
       )}
-      {client.ghlLocationId&&state==='loading'&&!leadsData&&(
+      {ready&&state==='loading'&&!leadsData&&(
         <div className="text-center py-6"><div className="inline-block w-6 h-6 border-4 border-brand border-t-transparent rounded-full animate-spin"/></div>
       )}
-      {client.ghlLocationId&&state==='error'&&(
+      {ready&&state==='error'&&(
         <div className="text-center py-4">
           <p className="text-xs text-red-600 mb-2">{error}</p>
           {errorDetail&&<p className="text-[10px] text-red-400 mb-2 font-mono break-all">{errorDetail}</p>}
           <button onClick={fetchLeads} className="text-xs text-brand hover:underline">Try Again</button>
         </div>
       )}
-      {client.ghlLocationId&&leadsData&&(
+      {ready&&leadsData&&(
         <>
           <p className="text-3xl font-bold text-brand-dark">{leadsData.totalLeads.toLocaleString()}</p>
           <p className="text-[11px] text-muted-stone mt-1">Form submissions · last {leadsData.windowDays} days · as of {fmt(leadsData.fetchedAt)}</p>
@@ -1357,11 +1359,11 @@ function SettingsTab({client,setData}){
   const [indexingError,setIndexingError]=useState('');
   const [connStatus,setConnStatus]=useState(null); // null=checking/unknown, else the /api/indexing-status response
   const [connChecking,setConnChecking]=useState(false);
-  const [local,setLocal]=useState(()=>({name:client.name||'',website:client.website||'',gbpUrl:client.gbpUrl||'',phone:client.phone||'',primaryCategory:client.primaryCategory||'',address:client.address||'',city:client.city||'',state:client.state||'',notes:client.notes||'',ghlLocationId:client.ghlLocationId||''}));
+  const [local,setLocal]=useState(()=>({name:client.name||'',website:client.website||'',gbpUrl:client.gbpUrl||'',phone:client.phone||'',primaryCategory:client.primaryCategory||'',address:client.address||'',city:client.city||'',state:client.state||'',notes:client.notes||'',ghlLocationId:client.ghlLocationId||'',ghlPrivateToken:client.ghlPrivateToken||''}));
   const [localScores,setLocalScores]=useState(()=>JSON.parse(JSON.stringify(client.scores||{gbpHealth:{current:0,projected:0},landingPage:{current:0},core30:{current:0,total:0}})));
   const [localPub,setLocalPub]=useState(()=>({repo:client.publishing?.repo||'',branch:client.publishing?.branch||'',pagesDir:client.publishing?.pagesDir||'src/pages',buildHook:client.publishing?.buildHook||''}));
   const prevId=useRef(client.id);
-  useEffect(()=>{if(prevId.current!==client.id){setLocal({name:client.name||'',website:client.website||'',gbpUrl:client.gbpUrl||'',phone:client.phone||'',primaryCategory:client.primaryCategory||'',address:client.address||'',city:client.city||'',state:client.state||'',notes:client.notes||'',ghlLocationId:client.ghlLocationId||''});setLocalScores(JSON.parse(JSON.stringify(client.scores||{})));setLocalPub({repo:client.publishing?.repo||'',branch:client.publishing?.branch||'',pagesDir:client.publishing?.pagesDir||'src/pages',buildHook:client.publishing?.buildHook||''});prevId.current=client.id}},[client.id]);
+  useEffect(()=>{if(prevId.current!==client.id){setLocal({name:client.name||'',website:client.website||'',gbpUrl:client.gbpUrl||'',phone:client.phone||'',primaryCategory:client.primaryCategory||'',address:client.address||'',city:client.city||'',state:client.state||'',notes:client.notes||'',ghlLocationId:client.ghlLocationId||'',ghlPrivateToken:client.ghlPrivateToken||''});setLocalScores(JSON.parse(JSON.stringify(client.scores||{})));setLocalPub({repo:client.publishing?.repo||'',branch:client.publishing?.branch||'',pagesDir:client.publishing?.pagesDir||'src/pages',buildHook:client.publishing?.buildHook||''});prevId.current=client.id}},[client.id]);
   const debRef=useRef(null);
   const update=(field,value)=>{
     setLocal(prev=>({...prev,[field]:value}));
@@ -1425,7 +1427,8 @@ function SettingsTab({client,setData}){
         <div><label className="text-sm font-medium text-deep-obsidian/70">Address</label><input value={local.address||''} onChange={e=>update('address',e.target.value)} className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/></div>
         <div><label className="text-sm font-medium text-deep-obsidian/70">City</label><input value={local.city||''} onChange={e=>update('city',e.target.value)} className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/></div>
         <div><label className="text-sm font-medium text-deep-obsidian/70">State</label><input value={local.state||''} onChange={e=>update('state',e.target.value)} className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/></div>
-        <div><label className="text-sm font-medium text-deep-obsidian/70">GHL Location ID</label><input value={local.ghlLocationId||''} onChange={e=>update('ghlLocationId',e.target.value)} placeholder="This client's GoHighLevel sub-account ID" className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/><p className="text-[11px] text-muted-stone mt-1">Enables the Website Leads card on the Dashboard — find it in that sub-account's GHL settings.</p></div>
+        <div><label className="text-sm font-medium text-deep-obsidian/70">GHL Location ID</label><input value={local.ghlLocationId||''} onChange={e=>update('ghlLocationId',e.target.value)} placeholder="This client's GoHighLevel sub-account ID" className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/></div>
+        <div><label className="text-sm font-medium text-deep-obsidian/70">GHL Private Integration Token</label><input type="password" value={local.ghlPrivateToken||''} onChange={e=>update('ghlPrivateToken',e.target.value)} placeholder="Token generated inside THIS client's own GHL sub-account" className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/><p className="text-[11px] text-muted-stone mt-1">Both fields enable the Website Leads card. The token must come from inside this client's own sub-account (Settings → Private Integrations there, not the Agency view) with the "Forms" scope checked — GHL's forms.readonly scope only exists at the sub-account level.</p></div>
       </div><div className="mt-3"><label className="text-sm font-medium text-deep-obsidian/70">Notes</label><textarea value={local.notes||''} onChange={e=>update('notes',e.target.value)} className="w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none" rows="3"/></div></div>
       <div className="stitch-glass-card rounded-[24px] p-6 mb-4"><h4 className="text-lg font-semibold text-brand-dark mb-3">Scores</h4><div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3"><div><label className="text-xs text-muted-stone">GBP Current</label><input type="number" value={localScores.gbpHealth?.current||0} onChange={e=>updateScore('gbpHealth.current',e.target.value)} className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/></div><div><label className="text-xs text-muted-stone">GBP Projected</label><input type="number" value={localScores.gbpHealth?.projected||0} onChange={e=>updateScore('gbpHealth.projected',e.target.value)} className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/></div><div><label className="text-xs text-muted-stone">Landing Page</label><input type="number" value={localScores.landingPage?.current||0} onChange={e=>updateScore('landingPage.current',e.target.value)} className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/></div><div><label className="text-xs text-muted-stone">Core 30 Current</label><input type="number" value={localScores.core30?.current||0} onChange={e=>updateScore('core30.current',e.target.value)} className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/></div><div><label className="text-xs text-muted-stone">Core 30 Total</label><input type="number" value={localScores.core30?.total||0} onChange={e=>updateScore('core30.total',e.target.value)} className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/></div></div></div>
       <div className="stitch-glass-card rounded-[24px] p-6 mb-4">
