@@ -4939,6 +4939,21 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
         return sp;
       };
       if(boundsPoints.length>1){
+        // Cap how much tighter the green-only fit is allowed to zoom beyond
+        // what it takes to fit the WHOLE grid. Without this, a small
+        // clustered handful of top-3 points (e.g. 9 green out of ~97 at a
+        // low SoLV) could zoom in so hard that ~85% of the grid — and
+        // almost the entire competitor picture — gets cropped out of view
+        // entirely, and the heat glow's radius (which scales with zoom)
+        // blows up into one dominant blob covering the whole map. Each
+        // Leaflet zoom level roughly DOUBLES resolution (so +1 zoom shows
+        // 1/4 the area, +3 would show ~1/64) — +1 still reads as
+        // meaningfully "zoomed in on the good part" without throwing away
+        // most of the map's context the way a bigger cap did.
+        const fullBounds=points.length>1?L.latLngBounds(points.map(p=>[p.lat,p.lng])):bounds;
+        map.fitBounds(fullBounds,{animate:false,padding:[20,20]});
+        const fullFitZoom=map.getZoom();
+        const zoomCap=Math.min(17,fullFitZoom+1);
         // Two-pass fit: a dot's actual on-screen size (radius + glow blur)
         // depends on the zoom level fitBounds picks, but the padding
         // fitBounds needs to AVOID cutting off that same dot depends on its
@@ -4948,11 +4963,11 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
         // re-fits with padding sized to match exactly. This can't be fooled
         // by any grid density / container size combination, unlike a single
         // guessed padding value (flat, or scaled to container size alone).
-        map.fitBounds(bounds,{maxZoom:17,animate:false,padding:[20,20]});
+        map.fitBounds(bounds,{maxZoom:zoomCap,animate:false,padding:[20,20]});
         const provisionalIcon=Math.round(clamp(measureSpacing()*0.95,8,46));
         const iconPad=Math.ceil(provisionalIcon/2+provisionalIcon/3.5+6);
         map.invalidateSize();
-        map.fitBounds(bounds,{maxZoom:17,animate:false,padding:[iconPad,iconPad]});
+        map.fitBounds(bounds,{maxZoom:zoomCap,animate:false,padding:[iconPad,iconPad]});
       }else{
         map.setView([boundsPoints[0]?.lat??centerLat,boundsPoints[0]?.lng??centerLng],15,{animate:false});
       }
