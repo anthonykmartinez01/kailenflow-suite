@@ -4781,14 +4781,48 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
       // after a resize (confirmed: the animated version gets stuck at the
       // pre-resize center/zoom, while the same call with animate:false
       // lands on the exact correct one every time).
-      // Fixed PIXEL padding, not bounds.pad(0.18) (a % of the bounds' OWN
-      // size) — that's what was cutting off green dots: a tight cluster of
-      // 2-3 close-together points has a tiny bounding box, so 18% of it is
-      // only a few pixels, nowhere near enough room for a ~46px dot plus its
-      // glow. A fixed pixel margin can never shrink below what a dot
-      // actually needs, no matter how tight the cluster is — so this can't
-      // recur on any account/any grid size.
-      if(boundsPoints.length>1){map.fitBounds(bounds,{maxZoom:17,animate:false,padding:[70,70]})}else{map.setView([boundsPoints[0]?.lat??centerLat,boundsPoints[0]?.lng??centerLng],15,{animate:false})}
+      // Padding must be sized relative to the CONTAINER, not a flat 70px —
+      // a flat value that's generous on a normal-sized map (the rank tab's
+      // 640px view) eats up a huge chunk of a small one (the 260px
+      // dashboard header preview), leaving too little room for fitBounds to
+      // satisfy both "fit these points" AND "keep 70px clear on every
+      // side" — which is what was cutting the grid off at the container's
+      // left/right edges. Capping padding at 12% of the container's own
+      // (smaller) dimension means it can never demand more room than the
+      // container actually has, on any container size.
+      const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+      // How far apart the grid points land on screen, measured across the
+      // FULL grid's bounds (not the possibly-tighter top-3-only `bounds`
+      // used for the zoom fit) — dividing a smaller bounds' pixel width by
+      // the full gridSize-1 step count would underestimate real spacing.
+      const measureSpacing=()=>{
+        let sp=60;
+        if(points.length>1&&gridSize>1){
+          const fullBounds=L.latLngBounds(points.map(p=>[p.lat,p.lng]));
+          const nw=map.latLngToContainerPoint(fullBounds.getNorthWest());
+          const ne=map.latLngToContainerPoint(fullBounds.getNorthEast());
+          sp=Math.hypot(ne.x-nw.x,ne.y-nw.y)/(gridSize-1);
+        }
+        return sp;
+      };
+      if(boundsPoints.length>1){
+        // Two-pass fit: a dot's actual on-screen size (radius + glow blur)
+        // depends on the zoom level fitBounds picks, but the padding
+        // fitBounds needs to AVOID cutting off that same dot depends on its
+        // size — a circular dependency a single fitBounds call can't solve.
+        // Pass 1 establishes a baseline zoom with a small fixed margin;
+        // pass 2 measures the dot size THAT zoom actually produces and
+        // re-fits with padding sized to match exactly. This can't be fooled
+        // by any grid density / container size combination, unlike a single
+        // guessed padding value (flat, or scaled to container size alone).
+        map.fitBounds(bounds,{maxZoom:17,animate:false,padding:[20,20]});
+        const provisionalIcon=Math.round(clamp(measureSpacing()*0.95,8,46));
+        const iconPad=Math.ceil(provisionalIcon/2+provisionalIcon/3.5+6);
+        map.invalidateSize();
+        map.fitBounds(bounds,{maxZoom:17,animate:false,padding:[iconPad,iconPad]});
+      }else{
+        map.setView([boundsPoints[0]?.lat??centerLat,boundsPoints[0]?.lng??centerLng],15,{animate:false});
+      }
     };
     refit();
     // Leaflet reads the container's size at construction time — if this
@@ -4805,19 +4839,11 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
       resizeObserver.observe(containerRef.current);
     }
 
-    // Now that we know the actual zoom, figure out how far apart the grid
-    // points really land on screen and scale pin size + glow radius/blur to
-    // that spacing — guarantees visible gaps between dots regardless of how
-    // dense or sparse the grid is, instead of a fixed pixel value that only
-    // looked right for one particular grid size/radius combo.
+    // Final measurement, taken AFTER refit() has settled at its (pass-2,
+    // icon-aware) zoom — scales pin size + glow radius/blur to that spacing.
     const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
     let spacingPx=60;
     if(points.length>1&&gridSize>1){
-      // Measured across the FULL grid's bounds, not the (possibly tighter,
-      // top-3-only) `bounds` used for the zoom fit above — dividing a
-      // smaller bounds' pixel width by the full gridSize-1 step count would
-      // underestimate real on-screen point spacing at the new zoom level,
-      // which made pins render smaller than they actually should at that zoom.
       const fullBounds=L.latLngBounds(points.map(p=>[p.lat,p.lng]));
       const nw=map.latLngToContainerPoint(fullBounds.getNorthWest());
       const ne=map.latLngToContainerPoint(fullBounds.getNorthEast());
@@ -4850,6 +4876,15 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
       }catch(e){/* container had zero size at this instant — refit() below corrects it */}
     }
 
+    // Zooming tight to the green cluster only guarantees green dots stay
+    // fully on-screen — it says nothing about the other colors, which can
+    // end up sliced in half right at the container edge (visually reads as
+    // broken regardless of which color it happens to be). Rather than
+    // trying to out-guess every possible padding scenario, just don't draw
+    // a dot at all if its full circle wouldn't fit on screen — a marker
+    // that's cleanly absent looks intentional; a marker sliced in half
+    // never does, on any grid/container combination.
+    const mapSize=map.getSize();
     points.forEach(p=>{
       // A stuck point (task submitted but never came back with a result) is
       // NOT the same thing as "confirmed not ranking" — the former means we
@@ -4857,6 +4892,9 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
       // identical to a real gray "not found" result.
       const stuck=!!p.taskId&&!p.rank&&!p.resolved;
       const color=stuck?'#374151':heatRankColor(p.rank);
+      const screenPt=map.latLngToContainerPoint([p.lat,p.lng]);
+      const halfIcon=iconSize/2;
+      if(screenPt.x-halfIcon<0||screenPt.x+halfIcon>mapSize.x||screenPt.y-halfIcon<0||screenPt.y+halfIcon>mapSize.y)return;
       // Below ~16px there's no room to render a legible label anyway (a
       // "20+" or "#12" crammed into a tiny circle is just noise) — show a
       // plain colored dot instead. The color pattern still reads fine at a
