@@ -1003,7 +1003,7 @@ function ClientDashboard({client,data,setData,setTab}){
           </div>
           <div className="lg:border-l border-glass-border min-h-[260px]">
             {latestLiveMap?(
-              <LeafletHeatMap points={latestLiveMap.grid} centerLat={latestLiveMap.centerLat} centerLng={latestLiveMap.centerLng} businessName={c.name} address={c.address} keyword={latestLiveMap.keyword} gridSize={latestLiveMap.gridSize} radiusMiles={latestLiveMap.radiusMiles} mapHeight={260}/>
+              <LeafletHeatMap points={latestLiveMap.grid} centerLat={latestLiveMap.centerLat} centerLng={latestLiveMap.centerLng} businessName={c.name} address={c.address} keyword={latestLiveMap.keyword} gridSize={latestLiveMap.gridSize} radiusMiles={latestLiveMap.radiusMiles} mapHeight={260} tightZoom={false}/>
             ):(
               <div className="h-full min-h-[260px] flex flex-col items-center justify-center text-center p-6 bg-warm-sand/90">
                 <span className="material-symbols-outlined text-3xl text-muted-stone mb-2">map</span>
@@ -5021,7 +5021,7 @@ function MiniHeatDots({grid,size=40}){
   );
 }
 
-function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword,gridSize,radiusMiles,mapHeight=440}){
+function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword,gridSize,radiusMiles,mapHeight=440,tightZoom=true}){
   const containerRef=useRef(null);
   const mapRef=useRef(null);
   const wrapperRef=useRef(null);
@@ -5099,7 +5099,17 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
     // so the map opens already zoomed as tight as possible on them instead
     // of the old zoomed-way-out view of the entire search radius. Falls
     // back to the full grid if nothing ranked top-3 anywhere.
-    const greenPoints=points.filter(p=>p.rank&&p.rank<=3);
+    //
+    // tightZoom=false (the small dashboard header preview) skips this
+    // entirely and always fits the full grid. Recentering on a green
+    // subset — even capped at only +1 zoom beyond the full-grid fit —
+    // shifts what's in frame enough that, on a short/wide container, rows
+    // far from that subset can end up outside the viewport and get
+    // dropped by the skip-if-clipped guard below. That read as "dots
+    // missing / map didn't fully load." A quick-glance thumbnail should
+    // always show the complete grid; the tighter zoom is worth it on the
+    // full-size Rankings tab view, which has the room to spare.
+    const greenPoints=tightZoom?points.filter(p=>p.rank&&p.rank<=3):[];
     const boundsPoints=greenPoints.length>0?greenPoints:points;
     const bounds=L.latLngBounds(boundsPoints.map(p=>[p.lat,p.lng]));
     const refit=()=>{
