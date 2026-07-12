@@ -5105,7 +5105,29 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
     // zoom, so the tight one always looked like a cramped, overlapping mess
     // no matter how the glow itself was tuned.
     const bounds=L.latLngBounds(points.map(p=>[p.lat,p.lng]));
-    if(points.length>1){map.fitBounds(bounds.pad(0.18),{maxZoom:17})}else{map.setView([centerLat,centerLng],15)}
+    const refit=()=>{
+      map.invalidateSize();
+      // animate:false is required, not cosmetic — fitBounds' default
+      // animated pan/zoom silently fails to complete when called right
+      // after a resize (confirmed: the animated version gets stuck at the
+      // pre-resize center/zoom, while the same call with animate:false
+      // lands on the exact correct one every time).
+      if(points.length>1){map.fitBounds(bounds.pad(0.18),{maxZoom:17,animate:false})}else{map.setView([centerLat,centerLng],15,{animate:false})}
+    };
+    refit();
+    // Leaflet reads the container's size at construction time — if this
+    // map mounts inside a column/card whose width isn't settled yet
+    // (flex/grid layout still resolving, a background image still loading,
+    // etc.), that first fit can lock onto a wrong size and never
+    // self-correct, leaving the grid off-center or way too zoomed out.
+    // Watching for real size changes and re-fitting fixes that without
+    // fighting the user's own pan/zoom (which never changes the
+    // container's DOM size).
+    let resizeObserver;
+    if(typeof ResizeObserver!=='undefined'){
+      resizeObserver=new ResizeObserver(()=>refit());
+      resizeObserver.observe(containerRef.current);
+    }
 
     // Now that we know the actual zoom, figure out how far apart the grid
     // points really land on screen and scale pin size + glow radius/blur to
@@ -5124,10 +5146,17 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
     const heatBlur=clamp(spacingPx*0.42,9,35);
 
     // Soft colored glow underneath the numbered pins, blending nearby points together.
+    // A genuinely 0-sized container (mount mid-layout, display:none, etc.)
+    // makes leaflet.heat's canvas draw throw (getImageData on 0 width) —
+    // harmless to skip it here since refit()'s later invalidateSize()/
+    // fitBounds() will fire Leaflet's own moveend event once the container
+    // has a real size, which leaflet.heat listens for to redraw itself.
     if(typeof L.heatLayer==='function'){
-      const heatPoints=points.map(p=>[p.lat,p.lng,heatIntensity(p.rank)]);
-      L.heatLayer(heatPoints,{radius:heatRadius,blur:heatBlur,maxZoom:17,minOpacity:0.16,
-        gradient:{0.0:'#4b5563',0.25:'#ef4444',0.5:'#f97316',0.7:'#eab308',0.85:'#22c55e',1.0:'#22c55e'}}).addTo(map);
+      try{
+        const heatPoints=points.map(p=>[p.lat,p.lng,heatIntensity(p.rank)]);
+        L.heatLayer(heatPoints,{radius:heatRadius,blur:heatBlur,maxZoom:17,minOpacity:0.16,
+          gradient:{0.0:'#4b5563',0.25:'#ef4444',0.5:'#f97316',0.7:'#eab308',0.85:'#22c55e',1.0:'#22c55e'}}).addTo(map);
+      }catch(e){/* container had zero size at this instant — refit() below corrects it */}
     }
 
     points.forEach(p=>{
@@ -5149,7 +5178,10 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
 
     L.marker([centerLat,centerLng],{icon:L.divIcon({className:'',html:'<div style="width:14px;height:14px;border-radius:50%;background:#fff;border:3px solid #1e293b"></div>',iconSize:[14,14],iconAnchor:[7,7]})}).addTo(map).bindPopup(businessName||'Business location');
 
-    return()=>{if(mapRef.current){mapRef.current.remove();mapRef.current=null}};
+    return()=>{
+      if(resizeObserver)resizeObserver.disconnect();
+      if(mapRef.current){mapRef.current.remove();mapRef.current=null}
+    };
   },[points,centerLat,centerLng,gridSize,isFullscreen]);
 
   return(
