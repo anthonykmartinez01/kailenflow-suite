@@ -1352,10 +1352,7 @@ function KeywordHistoryPanel({client,setData,kw,snapshots}){
             <input type="range" min="0" max={snapshots.length-1} value={selectedIndex} onChange={e=>scrubTo(Number(e.target.value))} className="w-full accent-[var(--color-primary,#b45309)]"/>
           )}
           {selected&&selected.status==='complete'&&(
-            <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-3 items-start">
-              <LeafletHeatMap points={selected.grid} centerLat={selected.centerLat} centerLng={selected.centerLng} businessName={selected.businessName} address={client.address} keyword={selected.keyword} gridSize={selected.gridSize} radiusMiles={selected.radiusMiles}/>
-              <CompetitorsPanel competitors={selected.competitors} clientCid={selected.mapsCid||client.mapsCid}/>
-            </div>
+            <RankMapDetail snapshot={selected} client={client}/>
           )}
         </>
       )}
@@ -4836,7 +4833,20 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
 // DataForSEO calls, no extra cost — same data already paid for.
 // "Visibility" here means the same thing it does everywhere else in this
 // app: % of grid points where that business ranks in the top 3.
-function CompetitorsPanel({competitors,clientCid}){
+// Joins a competitor's per-point ranks (keyed by taskId, from the free
+// per-point breakdown DataForSEO already returns) onto the SAME grid
+// geometry (row/col/lat/lng) the client's own map uses — lets any
+// competitor within the stored top-20 render as a full heat map with zero
+// additional API calls. Points the competitor didn't appear in (outside
+// the top 20 at that GPS point) come back rank:null, same as "not found."
+function buildCompetitorGrid(ownGrid,competitor){
+  if(!competitor?.grid)return null;
+  const rankByTask={};
+  competitor.grid.forEach(p=>{rankByTask[p.taskId]=p.rank});
+  return (ownGrid||[]).map(p=>({...p,rank:p.taskId in rankByTask?rankByTask[p.taskId]:null}));
+}
+
+function CompetitorsPanel({competitors,clientCid,selectedCid,onSelect}){
   if(!competitors||competitors.length===0){
     return(
       <div className="stitch-glass-card rounded-[20px] p-5 text-center">
@@ -4854,8 +4864,11 @@ function CompetitorsPanel({competitors,clientCid}){
       <div className="space-y-0.5 max-h-[420px] overflow-y-auto">
         {competitors.map((c,i)=>{
           const isTarget=clientCid&&c.cid===clientCid;
+          const canViewMap=!!c.grid&&!isTarget&&onSelect;
+          const isSelected=selectedCid===c.cid;
           return(
-            <div key={c.cid} className={`flex items-center justify-between gap-2 py-2 px-2 rounded-lg ${isTarget?'bg-brand/10 border border-brand/30':'border-b border-glass-border last:border-0'}`}>
+            <div key={c.cid} onClick={()=>canViewMap&&onSelect(isSelected?null:c.cid)}
+              className={`flex items-center justify-between gap-2 py-2 px-2 rounded-lg ${isTarget?'bg-brand/10 border border-brand/30':isSelected?'bg-brand/15 border border-brand/40':'border-b border-glass-border last:border-0'} ${canViewMap?'cursor-pointer hover:bg-black/[0.03]':''}`}>
               <div className="flex items-center gap-2 min-w-0">
                 <span className="text-[11px] text-muted-stone w-4 flex-shrink-0 text-right">{i+1}</span>
                 <div className="min-w-0">
@@ -4866,11 +4879,39 @@ function CompetitorsPanel({competitors,clientCid}){
               <div className="flex items-center gap-3 flex-shrink-0 text-right">
                 <div><p className="text-xs font-bold text-brand-dark">{c.visibilityPct}%</p><p className="text-[9px] text-muted-stone uppercase tracking-wide">Vis</p></div>
                 <div><p className="text-xs font-bold text-brand-dark">{c.avgRank}</p><p className="text-[9px] text-muted-stone uppercase tracking-wide">Rank</p></div>
+                {canViewMap&&<span className="material-symbols-outlined text-[16px] text-muted-stone" title="View their map">{isSelected?'visibility':'map'}</span>}
               </div>
             </div>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// Shared detail view for a completed rank map + its competitor leaderboard —
+// used by both LiveHeatMapGenerator's expanded row and the Local Keywords
+// history panel so "view a competitor's map" behaves identically everywhere.
+// Clicking a competitor swaps the main map to THEIR ranks at the exact same
+// grid points (buildCompetitorGrid above) — no new DataForSEO calls.
+function RankMapDetail({snapshot,client}){
+  const [selectedCid,setSelectedCid]=useState(null);
+  const competitors=snapshot.competitors||[];
+  const selectedCompetitor=selectedCid?competitors.find(c=>c.cid===selectedCid):null;
+  const displayGrid=selectedCompetitor?buildCompetitorGrid(snapshot.grid,selectedCompetitor):snapshot.grid;
+  const displayName=selectedCompetitor?selectedCompetitor.title:snapshot.businessName;
+  return(
+    <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-3 items-start">
+      <div>
+        {selectedCompetitor&&(
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
+            <button onClick={()=>setSelectedCid(null)} className="text-xs font-medium px-2 py-1 rounded-lg bg-brand/10 text-brand-dark hover:bg-brand/20">← Back to your map</button>
+            <span className="text-xs text-muted-stone">Viewing: <span className="font-bold text-brand-dark">{displayName}</span></span>
+          </div>
+        )}
+        <LeafletHeatMap points={displayGrid} centerLat={snapshot.centerLat} centerLng={snapshot.centerLng} businessName={displayName} address={selectedCompetitor?undefined:client.address} keyword={snapshot.keyword} gridSize={snapshot.gridSize} radiusMiles={snapshot.radiusMiles}/>
+      </div>
+      <CompetitorsPanel competitors={competitors} clientCid={snapshot.mapsCid||client.mapsCid} selectedCid={selectedCid} onSelect={setSelectedCid}/>
     </div>
   );
 }
@@ -5102,10 +5143,7 @@ function LiveHeatMapGenerator({client,setData}){
                 )}
               </div>
               {expanded===m.id&&m.status==='complete'&&(
-                <div className="mt-3 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-3 items-start">
-                  <LeafletHeatMap points={m.grid} centerLat={m.centerLat} centerLng={m.centerLng} businessName={m.businessName} address={client.address} keyword={m.keyword} gridSize={m.gridSize} radiusMiles={m.radiusMiles}/>
-                  <CompetitorsPanel competitors={m.competitors} clientCid={m.mapsCid||client.mapsCid}/>
-                </div>
+                <div className="mt-3"><RankMapDetail snapshot={m} client={client}/></div>
               )}
             </div>
           ))}

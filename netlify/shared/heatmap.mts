@@ -124,6 +124,14 @@ export interface CidCandidate { cid: string; title: string; phone?: string; doma
 export interface CompetitorStat {
   cid: string; title: string; category?: string; rating?: number; votes?: number;
   points: number; visibilityPct: number; avgRank: number;
+  // Per-point ranks {taskId,rank}, keyed the same way the client's own grid
+  // is (join on taskId) — lets the UI render this competitor's own heat map
+  // using the exact same grid geometry, no extra DataForSEO calls needed
+  // since it's all still just the local_finder items already fetched.
+  // Only populated for the top COMPETITOR_GRID_LIMIT competitors to bound
+  // how much this adds to the Firestore document (every snapshot is kept
+  // forever in rankMaps[]) — the rest keep summary stats only.
+  grid?: { taskId: string; rank: number }[];
 }
 
 // Scores a fuzzy-name-matched item against known ground-truth (the client's
@@ -238,7 +246,7 @@ export async function pollHeatmapTasks(opts: {
   // "Visibility" is defined the same way it is everywhere else in this
   // app (top-3 presence %, i.e. Share of Local Voice) for consistency,
   // not whatever a different tool might mean by the word.
-  const compAgg = new Map<string, { title: string; category?: string; rating?: number; votes?: number; count: number; top3Count: number; rankSum: number }>();
+  const compAgg = new Map<string, { title: string; category?: string; rating?: number; votes?: number; count: number; top3Count: number; rankSum: number; gridPoints: Map<string, number> }>();
   const totalPoints = ready.length;
   for (const f of ready) {
     for (const it of f.items) {
@@ -249,14 +257,17 @@ export async function pollHeatmapTasks(opts: {
         existing.count++;
         existing.rankSum += rank;
         if (rank <= 3) existing.top3Count++;
+        existing.gridPoints.set(f.taskId, rank);
       } else {
         compAgg.set(it.cid, {
           title: it.title, category: it.category, rating: it.rating?.value, votes: it.rating?.votes_count,
           count: 1, rankSum: rank, top3Count: rank <= 3 ? 1 : 0,
+          gridPoints: new Map([[f.taskId, rank]]),
         });
       }
     }
   }
+  const COMPETITOR_GRID_LIMIT = 20; // see CompetitorStat.grid comment
   const competitors: CompetitorStat[] | undefined = totalPoints > 0
     ? [...compAgg.entries()]
         .map(([compCid, v]) => ({
@@ -264,9 +275,15 @@ export async function pollHeatmapTasks(opts: {
           points: v.count,
           visibilityPct: Math.round((v.top3Count / totalPoints) * 1000) / 10,
           avgRank: Math.round((v.rankSum / v.count) * 10) / 10,
+          gridPoints: v.gridPoints,
         }))
         .sort((a, b) => b.visibilityPct - a.visibilityPct || a.avgRank - b.avgRank)
         .slice(0, 30)
+        .map((c, i) => {
+          const { gridPoints, ...rest } = c;
+          if (i >= COMPETITOR_GRID_LIMIT) return rest;
+          return { ...rest, grid: [...gridPoints.entries()].map(([taskId, rank]) => ({ taskId, rank })) };
+        })
     : undefined;
 
   return {
