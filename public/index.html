@@ -4606,8 +4606,8 @@ function GA4Section({client,setData,data}){
 const heatRankColor=(rank)=>{
   if(!rank)return'#6b7280';       // not found in top 20 at all
   if(rank<=3)return'#22c55e';     // in the visible pack
-  if(rank===4)return'#eab308';    // the cutoff — just missed it
-  if(rank<=10)return'#f97316';
+  if(rank===4)return'#facc15';    // the cutoff — just missed it (lighter yellow)
+  if(rank<=10)return'#fb923c';    // more true-orange, less muddy red-orange
   return'#ef4444';                // 11-20 — found, but far
 };
 const heatIntensity=(rank)=>rank?Math.max(0.15,1-((rank-1)/20)):0.02;
@@ -4806,11 +4806,17 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
     const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
     let spacingPx=60;
     if(points.length>1&&gridSize>1){
-      const nw=map.latLngToContainerPoint(bounds.getNorthWest());
-      const ne=map.latLngToContainerPoint(bounds.getNorthEast());
+      // Measured across the FULL grid's bounds, not the (possibly tighter,
+      // top-3-only) `bounds` used for the zoom fit above — dividing a
+      // smaller bounds' pixel width by the full gridSize-1 step count would
+      // underestimate real on-screen point spacing at the new zoom level,
+      // which made pins render smaller than they actually should at that zoom.
+      const fullBounds=L.latLngBounds(points.map(p=>[p.lat,p.lng]));
+      const nw=map.latLngToContainerPoint(fullBounds.getNorthWest());
+      const ne=map.latLngToContainerPoint(fullBounds.getNorthEast());
       spacingPx=Math.hypot(ne.x-nw.x,ne.y-nw.y)/(gridSize-1);
     }
-    const iconSize=Math.round(clamp(spacingPx*0.85,20,40));
+    const iconSize=Math.round(clamp(spacingPx*0.95,22,46));
     const heatRadius=clamp(spacingPx*0.55,12,45);
     const heatBlur=clamp(spacingPx*0.42,9,35);
 
@@ -4824,7 +4830,7 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
       try{
         const heatPoints=points.map(p=>[p.lat,p.lng,heatIntensity(p.rank)]);
         L.heatLayer(heatPoints,{radius:heatRadius,blur:heatBlur,maxZoom:17,minOpacity:0.16,
-          gradient:{0.0:'#4b5563',0.25:'#ef4444',0.5:'#f97316',0.7:'#eab308',0.85:'#22c55e',1.0:'#22c55e'}}).addTo(map);
+          gradient:{0.0:'#4b5563',0.25:'#ef4444',0.5:'#fb923c',0.7:'#facc15',0.85:'#22c55e',1.0:'#22c55e'}}).addTo(map);
       }catch(e){/* container had zero size at this instant — refit() below corrects it */}
     }
 
@@ -4835,8 +4841,8 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
       // identical to a real gray "not found" result.
       const stuck=!!p.taskId&&!p.rank&&!p.resolved;
       const color=stuck?'#374151':heatRankColor(p.rank);
-      const label=stuck?'?':(p.rank?('#'+p.rank):'—');
-      const fontSize=Math.max(9,Math.round(iconSize*0.38));
+      const label=stuck?'?':(p.rank?('#'+p.rank):'20+');
+      const fontSize=Math.max(9,Math.round(iconSize*(label.length>2?0.3:0.38)));
       const icon=L.divIcon({
         className:'',
         html:`<div style="width:${iconSize}px;height:${iconSize}px;border-radius:50%;background:${color};border:2px solid rgba(255,255,255,${stuck?0.4:0.85});box-shadow:0 0 ${Math.round(iconSize/3.5)}px ${color}99;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:${fontSize}px;font-family:system-ui;opacity:${stuck?0.55:1}">${label}</div>`,
