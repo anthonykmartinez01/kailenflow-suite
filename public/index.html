@@ -797,6 +797,7 @@ function TodaysTasks({data,setData}){
 function GHLLeadsCard({client,setData,setTab}){
   const [state,setState]=useState('idle'); // idle|loading|loaded|error
   const [error,setError]=useState('');
+  const [errorDetail,setErrorDetail]=useState('');
   // Local state is the source of truth for what's rendered — caching to
   // client.ghlSummary via setData is a nice-to-have for OTHER tabs/next
   // visits, but this component must never depend on that round-trip
@@ -806,11 +807,11 @@ function GHLLeadsCard({client,setData,setTab}){
 
   const fetchLeads=async()=>{
     if(!client.ghlLocationId)return;
-    setState('loading');setError('');
+    setState('loading');setError('');setErrorDetail('');
     try{
       const r=await fetch('/api/ghl-leads',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({locationId:client.ghlLocationId,days:28})});
       const j=await r.json();
-      if(!r.ok||j.error){setState('error');setError(j.error||'Failed to load leads');return}
+      if(!r.ok||j.error){setState('error');setError(j.error||'Failed to load leads');setErrorDetail(j.detail||'');return}
       const summary={totalLeads:j.totalLeads,windowDays:j.windowDays,fetchedAt:Date.now()};
       setLeadsData(summary);
       setState('loaded');
@@ -845,6 +846,7 @@ function GHLLeadsCard({client,setData,setTab}){
       {client.ghlLocationId&&state==='error'&&(
         <div className="text-center py-4">
           <p className="text-xs text-red-600 mb-2">{error}</p>
+          {errorDetail&&<p className="text-[10px] text-red-400 mb-2 font-mono break-all">{errorDetail}</p>}
           <button onClick={fetchLeads} className="text-xs text-brand hover:underline">Try Again</button>
         </div>
       )}
