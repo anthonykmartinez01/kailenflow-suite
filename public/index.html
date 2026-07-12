@@ -1236,133 +1236,311 @@ function TasksTab({client,setData}){
   );
 }
 
+// ─── Local Keywords (Focus/Tracked list + history scrubber) ───
+// trackedKeywords entries: {id, keyword, category:'focus'|'tracked', gridSize, radiusMiles, device, addedAt}
+// Auto-migrated once from distinct client.rankMaps keywords (category defaults to 'focus') the
+// first time this section mounts for a client that predates this feature.
+function parsePct(s){if(s===undefined||s===null)return null;const n=parseFloat(String(s).replace('%',''));return isNaN(n)?null:n}
+
+function AddKeywordModal({open,onClose,onAdd}){
+  const [keyword,setKeyword]=useState('');
+  const [category,setCategory]=useState('focus');
+  const [gridSize,setGridSize]=useState(5);
+  const [radiusMiles,setRadiusMiles]=useState('2');
+  const [device,setDevice]=useState('mobile');
+  const submit=()=>{
+    if(!keyword.trim())return;
+    onAdd({id:uid(),keyword:keyword.trim(),category,gridSize,radiusMiles:Number(radiusMiles)||2,device,addedAt:Date.now()});
+    setKeyword('');setCategory('focus');
+    onClose();
+  };
+  return(
+    <Modal open={open} onClose={onClose} title="Add Keyword to Track">
+      <div className="space-y-3 font-manrope">
+        <div>
+          <label className="text-xs text-muted-stone">Keyword</label>
+          <input value={keyword} onChange={e=>setKeyword(e.target.value)} placeholder="e.g. tree removal prosper tx" className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl text-sm focus:ring-1 focus:ring-brand focus:outline-none"/>
+        </div>
+        <div>
+          <label className="text-xs text-muted-stone">Category</label>
+          <div className="flex gap-2 mt-1">
+            <button type="button" onClick={()=>setCategory('focus')} className={`touch-target flex-1 px-3 py-2 rounded-xl text-sm font-medium border ${category==='focus'?'bg-brand text-white border-brand':'border-glass-border text-muted-stone'}`}>Focus</button>
+            <button type="button" onClick={()=>setCategory('tracked')} className={`touch-target flex-1 px-3 py-2 rounded-xl text-sm font-medium border ${category==='tracked'?'bg-brand text-white border-brand':'border-glass-border text-muted-stone'}`}>Tracked</button>
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <label className="text-xs text-muted-stone">Grid size</label>
+            <select value={gridSize} onChange={e=>setGridSize(Number(e.target.value))} className="touch-target w-full mt-1 px-2 py-2 border border-glass-border rounded-xl text-sm focus:ring-1 focus:ring-brand focus:outline-none">
+              {[3,5,7,9,11,13].map(n=><option key={n} value={n}>{n}×{n}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs text-muted-stone">Radius (mi)</label>
+            <input type="number" min="0.25" step="0.25" value={radiusMiles} onChange={e=>setRadiusMiles(e.target.value)} className="touch-target w-full mt-1 px-2 py-2 border border-glass-border rounded-xl text-sm focus:ring-1 focus:ring-brand focus:outline-none"/>
+          </div>
+          <div>
+            <label className="text-xs text-muted-stone">Device</label>
+            <select value={device} onChange={e=>setDevice(e.target.value)} className="touch-target w-full mt-1 px-2 py-2 border border-glass-border rounded-xl text-sm focus:ring-1 focus:ring-brand focus:outline-none">
+              <option value="mobile">Mobile</option>
+              <option value="desktop">Desktop</option>
+            </select>
+          </div>
+        </div>
+        <p className="text-[11px] text-muted-stone">Adding a keyword doesn't run a scan or spend anything — it just starts tracking. Run a scan from the keyword's history panel whenever you're ready.</p>
+        <button onClick={submit} disabled={!keyword.trim()} className="touch-target w-full py-2.5 bg-brand text-white rounded-xl hover:bg-brand-hover font-medium shadow-lg shadow-brand/20 disabled:opacity-50">Add Keyword</button>
+      </div>
+    </Modal>
+  );
+}
+
+function KeywordHistoryPanel({client,setData,kw,snapshots}){
+  const [running,setRunning]=useState(false);
+  const [runError,setRunError]=useState('');
+  const [selectedId,setSelectedId]=useState(snapshots[0]?.id||null);
+  const scrollRef=useRef(null);
+  const cardRefs=useRef({});
+  const selected=snapshots.find(s=>s.id===selectedId)||snapshots[0];
+  const selectedIndex=Math.max(0,snapshots.findIndex(s=>s.id===selectedId));
+
+  const runNow=async()=>{
+    if(!client.placeId||!client.geo){setRunError('Look up the business location first (above).');return}
+    setRunning(true);setRunError('');
+    const res=await generateLiveHeatMap({client,setData,keyword:kw.keyword,gridSize:kw.gridSize||5,radiusMiles:kw.radiusMiles||2,device:kw.device||'mobile'});
+    if(!res.ok)setRunError(res.error);
+    setRunning(false);
+  };
+
+  const scrubTo=(idx)=>{
+    const s=snapshots[idx];
+    if(!s)return;
+    setSelectedId(s.id);
+    const el=cardRefs.current[s.id];
+    if(el&&scrollRef.current)el.scrollIntoView({behavior:'smooth',inline:'center',block:'nearest'});
+  };
+
+  return(
+    <div className="mt-3 pt-3 border-t border-glass-border space-y-3">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <h5 className="text-[11px] font-semibold text-muted-stone uppercase tracking-widest">History</h5>
+        <div className="flex items-center gap-2">
+          <button onClick={runNow} disabled={running} className="touch-target px-3 py-1.5 bg-brand text-white rounded-lg text-xs font-medium hover:bg-brand-hover disabled:opacity-50">{running?'Submitting...':'Run Now'}</button>
+        </div>
+      </div>
+      {runError&&<div className="bg-red-50 text-red-700 rounded-xl p-2 text-xs">{runError}</div>}
+
+      {snapshots.length===0?(
+        <p className="text-xs text-muted-stone">No scans yet for this keyword. Click Run Now to generate the first one.</p>
+      ):(
+        <>
+          <div ref={scrollRef} className="flex gap-2 overflow-x-auto pb-2 -mx-1 px-1">
+            {snapshots.map((s,i)=>(
+              <button key={s.id} ref={el=>cardRefs.current[s.id]=el} onClick={()=>setSelectedId(s.id)} className={`flex-shrink-0 w-32 rounded-xl p-2 text-left border transition-colors ${selectedId===s.id?'border-brand bg-brand/5':'border-glass-border hover:border-brand/40'}`}>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[10px] text-muted-stone">{fmt(s.snapshotDate)}</span>
+                  {i===0&&<span className="text-[9px] font-bold text-brand bg-brand/10 px-1 rounded">LATEST</span>}
+                </div>
+                <div className="flex items-center justify-center py-1"><MiniHeatDots grid={s.grid} size={36}/></div>
+                <div className="flex items-center justify-between text-[10px]">
+                  <span className="font-bold text-brand-dark">{s.solv||'—'}</span>
+                  <span className="text-muted-stone">Avg {s.avgRank||'—'}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+          {snapshots.length>1&&(
+            <input type="range" min="0" max={snapshots.length-1} value={selectedIndex} onChange={e=>scrubTo(Number(e.target.value))} className="w-full accent-[var(--color-primary,#b45309)]"/>
+          )}
+          {selected&&selected.status==='complete'&&(
+            <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-3 items-start">
+              <LeafletHeatMap points={selected.grid} centerLat={selected.centerLat} centerLng={selected.centerLng} businessName={selected.businessName} address={client.address} keyword={selected.keyword} gridSize={selected.gridSize} radiusMiles={selected.radiusMiles}/>
+              <CompetitorsPanel competitors={selected.competitors} clientCid={selected.mapsCid||client.mapsCid}/>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function KeywordRow({client,setData,kw,snapshots,onMove,onRemove,expanded,onToggleExpand,dragHandlers}){
+  const latest=snapshots[0];
+  const prev=snapshots[1];
+  const [menuOpen,setMenuOpen]=useState(false);
+  const latestSolv=parsePct(latest?.solv);
+  const prevSolv=parsePct(prev?.solv);
+  const solvChange=(latestSolv!==null&&prevSolv!==null)?parseFloat((latestSolv-prevSolv).toFixed(1)):null;
+  const rankChange=(latest?.avgRank&&prev?.avgRank)?parseFloat((prev.avgRank-latest.avgRank).toFixed(1)):null; // positive = rank improved (lower number)
+
+  return(
+    <div className="stitch-glass-card rounded-[18px] overflow-hidden" draggable onDragStart={e=>dragHandlers.onDragStart(e,kw.id)}>
+      <div className="flex items-center gap-3 p-3 cursor-move">
+        <MiniHeatDots grid={latest?.grid} size={36}/>
+        <div className="flex-1 min-w-0 cursor-pointer" onClick={onToggleExpand}>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-bold text-brand-dark truncate">{kw.keyword}</p>
+            <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full flex-shrink-0 ${kw.category==='focus'?'bg-brand/15 text-brand-dark':'bg-black/5 text-muted-stone'}`}>{kw.category}</span>
+          </div>
+          <p className="text-[11px] text-muted-stone mt-0.5">{latest?`Last scan: ${fmt(latest.snapshotDate)}`:'Last scan: never'}</p>
+        </div>
+        <div className="flex items-center gap-3 flex-shrink-0 text-right">
+          <div>
+            <p className="text-sm font-bold text-brand-dark">{latest?.solv||'—'}</p>
+            {solvChange!==null&&solvChange!==0&&<p className={`text-[10px] font-bold ${solvChange>0?'text-green-600':'text-red-600'}`}>{solvChange>0?'↑':'↓'}{Math.abs(solvChange)}%</p>}
+            <p className="text-[9px] text-muted-stone uppercase tracking-wide">Vis</p>
+          </div>
+          <div>
+            <p className="text-sm font-bold text-brand-dark">{latest?.avgRank||'—'}</p>
+            {rankChange!==null&&rankChange!==0&&<p className={`text-[10px] font-bold ${rankChange>0?'text-green-600':'text-red-600'}`}>{rankChange>0?'↑':'↓'}{Math.abs(rankChange)}</p>}
+            <p className="text-[9px] text-muted-stone uppercase tracking-wide">Rank</p>
+          </div>
+          <div className="relative">
+            <button onClick={()=>setMenuOpen(o=>!o)} className="touch-target flex items-center justify-center w-8 h-8 rounded-full hover:bg-black/5 text-muted-stone"><span className="material-symbols-outlined text-[18px]">more_vert</span></button>
+            {menuOpen&&(
+              <div className="absolute right-0 top-9 z-10 bg-white rounded-xl shadow-lg border border-glass-border py-1 w-44 text-sm">
+                <button onClick={()=>{onMove(kw.category==='focus'?'tracked':'focus');setMenuOpen(false)}} className="w-full text-left px-3 py-2 hover:bg-black/5">Move to {kw.category==='focus'?'Tracked':'Focus'}</button>
+                <button onClick={()=>{if(confirm('Stop tracking this keyword? Past scan history is kept.'))onRemove();setMenuOpen(false)}} className="w-full text-left px-3 py-2 hover:bg-black/5 text-red-500">Remove from tracking</button>
+              </div>
+            )}
+          </div>
+          <button onClick={onToggleExpand} className="touch-target flex items-center justify-center w-8 h-8 rounded-full hover:bg-black/5 text-muted-stone"><span className={`material-symbols-outlined text-[18px] transition-transform ${expanded?'rotate-180':''}`}>expand_more</span></button>
+        </div>
+      </div>
+      {expanded&&<div className="px-3 pb-3"><KeywordHistoryPanel client={client} setData={setData} kw={kw} snapshots={snapshots}/></div>}
+    </div>
+  );
+}
+
+function KeywordDropZone({title,items,client,setData,keywordSnapshots,expandedId,setExpandedId,onMove,onRemove,dragHandlers,isOver,onDragOver,onDragLeave,onDrop}){
+  return(
+    <div onDragOver={onDragOver} onDragLeave={onDragLeave} onDrop={onDrop} className={`rounded-[20px] p-1 transition-colors ${isOver?'bg-brand/5 ring-2 ring-brand/30':''}`}>
+      <h5 className="text-[11px] font-semibold text-muted-stone uppercase tracking-widest px-2 mb-2">{title} ({items.length})</h5>
+      {items.length===0?(
+        <div className="text-xs text-muted-stone px-2 py-4 text-center border border-dashed border-glass-border rounded-xl">Drag keywords here</div>
+      ):(
+        <div className="space-y-2">
+          {items.map(kw=>(
+            <KeywordRow key={kw.id} client={client} setData={setData} kw={kw} snapshots={keywordSnapshots(kw)}
+              onMove={cat=>onMove(kw.id,cat)} onRemove={()=>onRemove(kw.id)}
+              expanded={expandedId===kw.id} onToggleExpand={()=>setExpandedId(expandedId===kw.id?null:kw.id)}
+              dragHandlers={dragHandlers}/>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LocalKeywordsSection({client,setData}){
+  const rankMaps=client.rankMaps||[];
+  const [addOpen,setAddOpen]=useState(false);
+  const [expandedId,setExpandedId]=useState(null);
+  const [draggedId,setDraggedId]=useState(null);
+  const [dragOverZone,setDragOverZone]=useState(null);
+
+  useEffect(()=>{
+    if(client.trackedKeywords)return;
+    const seen=new Set();
+    const initial=[];
+    rankMaps.forEach(m=>{
+      const kw=m.keyword?.trim();
+      if(!kw||kw.toLowerCase()==='unknown')return;
+      const key=kw.toLowerCase();
+      if(seen.has(key))return;
+      seen.add(key);
+      initial.push({id:uid(),keyword:kw,category:'focus',gridSize:m.gridSize||5,radiusMiles:m.radiusMiles||2,device:m.device||'mobile',addedAt:Date.now()});
+    });
+    setData(prev=>{const nd={...prev,clients:prev.clients.map(c=>c.id===client.id?{...c,trackedKeywords:initial}:c)};saveData(nd);return nd});
+  },[client.id]); // eslint-disable-line
+
+  const tracked=client.trackedKeywords;
+  if(!tracked)return null; // migration effect hasn't written yet — avoids a one-frame empty flash
+
+  const keywordSnapshots=(kw)=>{
+    const key=kw.keyword.toLowerCase();
+    return rankMaps.filter(m=>m.keyword?.toLowerCase().trim()===key&&m.status!=='pending')
+      .sort((a,b)=>(b.snapshotDate||b.uploadedAt||'').localeCompare(a.snapshotDate||a.uploadedAt||''));
+  };
+
+  const updateTracked=(next)=>{
+    setData(prev=>{const nd={...prev,clients:prev.clients.map(c=>c.id===client.id?{...c,trackedKeywords:next}:c)};saveData(nd);return nd});
+  };
+  const moveCategory=(id,category)=>updateTracked(tracked.map(k=>k.id===id?{...k,category}:k));
+  const removeKeyword=(id)=>updateTracked(tracked.filter(k=>k.id!==id));
+  const addKeyword=(entry)=>updateTracked([entry,...tracked]);
+
+  const dragHandlers={
+    onDragStart:(e,id)=>{setDraggedId(id);e.dataTransfer.effectAllowed='move';try{e.dataTransfer.setData('text/plain',id)}catch(err){}},
+  };
+  const zoneHandlers=(zoneKey,category)=>({
+    isOver:dragOverZone===zoneKey,
+    onDragOver:e=>{e.preventDefault();e.dataTransfer.dropEffect='move';if(dragOverZone!==zoneKey)setDragOverZone(zoneKey)},
+    onDragLeave:()=>setDragOverZone(null),
+    onDrop:e=>{
+      e.preventDefault();
+      const id=draggedId||e.dataTransfer.getData('text/plain');
+      if(id)moveCategory(id,category);
+      setDraggedId(null);setDragOverZone(null);
+    },
+  });
+
+  const focusItems=tracked.filter(k=>k.category==='focus');
+  const trackedItems=tracked.filter(k=>k.category==='tracked');
+
+  return(
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-xl font-bold text-brand-dark mb-1">Local Keywords</h3>
+          <p className="text-sm text-muted-stone">Real Google local-pack rankings, tracked over time</p>
+        </div>
+        <button onClick={()=>setAddOpen(true)} className="touch-target px-4 py-2 bg-brand text-white rounded-xl text-sm font-medium hover:bg-brand-hover shadow-lg shadow-brand/20 flex items-center gap-1.5"><span className="material-symbols-outlined text-[18px]">add</span>Add Keyword</button>
+      </div>
+
+      {tracked.length===0?(
+        <div className="stitch-glass-card rounded-[24px] p-8 text-center">
+          <span className="material-symbols-outlined text-4xl text-brand mb-2">trending_up</span>
+          <h4 className="font-bold text-brand-dark">No keywords tracked yet</h4>
+          <p className="text-sm text-muted-stone mt-1">Add a keyword to start tracking real local-pack rankings</p>
+        </div>
+      ):(
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <KeywordDropZone title="Focus Keywords" items={focusItems} client={client} setData={setData} keywordSnapshots={keywordSnapshots}
+            expandedId={expandedId} setExpandedId={setExpandedId} onMove={moveCategory} onRemove={removeKeyword}
+            dragHandlers={dragHandlers} {...zoneHandlers('focus','focus')}/>
+          <KeywordDropZone title="Tracked Keywords" items={trackedItems} client={client} setData={setData} keywordSnapshots={keywordSnapshots}
+            expandedId={expandedId} setExpandedId={setExpandedId} onMove={moveCategory} onRemove={removeKeyword}
+            dragHandlers={dragHandlers} {...zoneHandlers('tracked','tracked')}/>
+        </div>
+      )}
+
+      <AddKeywordModal open={addOpen} onClose={()=>setAddOpen(false)} onAdd={addKeyword}/>
+    </div>
+  );
+}
+
 // ─── Rankings Tab ───
 function RankingsTab({client,setData}){
-  // Build keyword summary from rank maps
-  const rankMaps=client.rankMaps||[];
-  const keywordGroups={};
-  rankMaps.forEach(m=>{
-    const kw=m.keyword?.toLowerCase().trim();
-    if(!kw||kw==='unknown')return;
-    if(!keywordGroups[kw])keywordGroups[kw]={keyword:m.keyword,snapshots:[]};
-    keywordGroups[kw].snapshots.push(m);
-  });
-  // Sort snapshots by date (newest first) within each group
-  Object.values(keywordGroups).forEach(g=>{
-    g.snapshots.sort((a,b)=>(b.snapshotDate||b.uploadedAt||'').localeCompare(a.snapshotDate||a.uploadedAt||''));
-  });
-  const keywords=Object.values(keywordGroups);
-
   const rankColor=(r)=>{if(!r||r<=0)return'text-gray-400';if(r<=3)return'text-green-600';if(r<=7)return'text-yellow-600';if(r<=12)return'text-orange-600';return'text-red-600'};
-  const rankBg=(r)=>{if(!r||r<=0)return'bg-gray-100';if(r<=3)return'bg-green-50';if(r<=7)return'bg-yellow-50';if(r<=12)return'bg-orange-50';return'bg-red-50'};
 
-  // Also include legacy manual rankData
-  const manualRanks=(client.rankData||[]).filter(r=>!keywords.some(k=>k.keyword.toLowerCase()===r.keyword.toLowerCase()));
+  // Legacy manual rankData that predates rank maps entirely — kept as its own
+  // read-only strip since it has no grid/history to plug into the new list.
+  const trackedKws=new Set((client.trackedKeywords||[]).map(k=>k.keyword.toLowerCase()));
+  const manualRanks=(client.rankData||[]).filter(r=>!trackedKws.has(r.keyword.toLowerCase()));
 
   return(
     <div className="fade-in space-y-6">
-      {/* Keyword Performance Summary */}
-      <div>
-        <h3 className="text-xl font-bold text-brand-dark mb-1">Rankings</h3>
-        <p className="text-sm text-muted-stone mb-4">Keyword performance from your rank map uploads</p>
+      <LocalKeywordsSection client={client} setData={setData}/>
 
-        {keywords.length===0&&manualRanks.length===0&&(
-          <div className="stitch-glass-card rounded-[24px] p-8 text-center">
-            <span className="material-symbols-outlined text-4xl text-brand mb-2">trending_up</span>
-            <h4 className="font-bold text-brand-dark">No ranking data yet</h4>
-            <p className="text-sm text-muted-stone mt-1">Upload heat maps below to start tracking keyword rankings</p>
-          </div>
-        )}
-
-        {keywords.length>0&&(
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
-            {keywords.map(kw=>{
-              const latest=kw.snapshots[0];
-              const prev=kw.snapshots[1];
-              const change=prev?parseFloat((prev.avgRank-latest.avgRank).toFixed(1)):null;
-              const top3Change=prev?(latest.top3-prev.top3):null;
-              // SoLV parsing: extract number from strings like "10.0%" or "10.0"
-              const parseSolv=(s)=>{if(!s)return null;const n=parseFloat(String(s).replace('%',''));return isNaN(n)?null:n};
-              const latestSolv=parseSolv(latest.solv);
-              const prevSolv=prev?parseSolv(prev.solv):null;
-              const solvChange=(latestSolv!==null&&prevSolv!==null)?parseFloat((latestSolv-prevSolv).toFixed(1)):null;
-              return(
-                <div key={kw.keyword} className="stitch-glass-card stitch-hover-lift rounded-[20px] p-5">
-                  <p className="text-sm font-bold text-brand-dark mb-3 truncate" title={kw.keyword}>"{kw.keyword}"</p>
-                  <div className="grid grid-cols-2 gap-3 mb-2">
-                    <div>
-                      <p className="text-xs text-muted-stone">Avg Rank</p>
-                      <div className="flex items-center gap-2">
-                        <span className={`text-3xl font-bold ${rankColor(latest.avgRank)}`}>{latest.avgRank||'—'}</span>
-                        {change!==null&&change!==0&&(
-                          <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${change>0?'bg-green-100 text-green-700':'bg-red-100 text-red-700'}`}>
-                            {change>0?'↑':'↓'}{Math.abs(change)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div>
-                      <p className="text-xs text-muted-stone">Share of Local Voice</p>
-                      <div className="flex items-center gap-2">
-                        <span className="text-3xl font-bold text-blue-600">{latest.solv||'—'}</span>
-                        {solvChange!==null&&solvChange!==0&&(
-                          <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${solvChange>0?'bg-green-100 text-green-700':'bg-red-100 text-red-700'}`}>
-                            {solvChange>0?'+':''}{solvChange}%
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-4 gap-1 text-center">
-                    <div className="rounded-lg py-1.5 bg-green-50">
-                      <p className="text-[10px] text-muted-stone">Top 3</p>
-                      <p className="text-base font-bold text-green-700">{latest.top3||0}</p>
-                      {top3Change!==null&&top3Change!==0&&<p className={`text-[10px] font-bold ${top3Change>0?'text-green-600':'text-red-600'}`}>{top3Change>0?'+':''}{top3Change}</p>}
-                    </div>
-                    <div className="rounded-lg py-1.5 bg-yellow-50">
-                      <p className="text-[10px] text-muted-stone">4-10</p>
-                      <p className="text-base font-bold text-yellow-700">{latest.top4to10||0}</p>
-                    </div>
-                    <div className="rounded-lg py-1.5 bg-orange-50">
-                      <p className="text-[10px] text-muted-stone">11-20</p>
-                      <p className="text-base font-bold text-orange-700">{latest.top11to20||0}</p>
-                    </div>
-                    <div className="rounded-lg py-1.5 bg-red-50">
-                      <p className="text-[10px] text-muted-stone">21+</p>
-                      <p className="text-base font-bold text-red-700">{latest.top21plus||0}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between mt-3">
-                    {latest.solv?(
-                      <span className="text-xs font-bold bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">SoLV: {latest.solv}</span>
-                    ):(
-                      <span className="text-xs text-muted-stone">{latest.gridSize&&`${latest.gridSize} · `}{latest.radius||''}</span>
-                    )}
-                    <span className="text-xs text-muted-stone">{kw.snapshots.length} snapshot{kw.snapshots.length!==1?'s':''}</span>
-                  </div>
-                  {/* Mini trend - show last 5 avg ranks */}
-                  {kw.snapshots.length>1&&(
-                    <div className="mt-2 pt-2 border-t border-black/5 flex items-center gap-1">
-                      <span className="text-[10px] text-muted-stone mr-1">Trend:</span>
-                      {kw.snapshots.slice(0,6).reverse().map((s,i)=>(
-                        <span key={i} className={`text-xs font-mono px-1.5 py-0.5 rounded ${rankBg(s.avgRank)} ${rankColor(s.avgRank)}`}>{s.avgRank}</span>
-                      ))}
-                      {kw.snapshots.length>6&&<span className="text-[10px] text-muted-stone">...</span>}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Legacy manual rankings */}
-        {manualRanks.length>0&&(
+      {/* Legacy manual rankings */}
+      {manualRanks.length>0&&(
+        <div>
+          <h4 className="text-[11px] font-semibold text-muted-stone uppercase tracking-widest mb-2">Manual Rankings (legacy)</h4>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {manualRanks.map(r=>(<div key={r.id} className="stitch-glass-card rounded-[20px] p-5 opacity-75"><p className="text-sm font-bold text-brand-dark mb-2 truncate">{r.keyword} <span className="text-xs text-muted-stone font-normal">(manual)</span></p><div className="flex items-end gap-3"><div><p className="text-xs text-muted-stone">Avg Position</p><p className={`text-3xl font-bold ${rankColor(r.avgRank)}`}>{r.avgRank}</p></div><div className="flex-1"><p className="text-xs text-muted-stone">Range</p><p className="text-sm font-medium">{r.range}</p></div><div><p className="text-xs text-muted-stone">Volume</p><p className="text-sm font-medium">{r.solv}</p></div></div><p className="text-xs text-muted-stone mt-2">Updated {fmt(r.date)}</p></div>))}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Divider */}
       <div className="border-t border-glass-border pt-6">
@@ -4415,6 +4593,87 @@ const circularGridCount=(n)=>{
   return count;
 };
 
+// Shared, parameterized so both LiveHeatMapGenerator's form AND the
+// Local Keywords list's "Run Now" can trigger a real generation without
+// duplicating the fetch/response-handling logic. Same behavior as the
+// original component-local version, just not closed over component state.
+async function generateLiveHeatMap({client,setData,keyword,gridSize,radiusMiles,device}){
+  if(!client.placeId||!client.geo)return{ok:false,error:'Look up the business location first.'};
+  if(!keyword||!keyword.trim())return{ok:false,error:'Enter a keyword to track.'};
+  if(!radiusMiles||Number(radiusMiles)<=0)return{ok:false,error:'Enter a radius in miles.'};
+  try{
+    const r=await fetch('/api/generate-heatmap',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({keyword:keyword.trim(),placeId:client.placeId,mapsCid:client.mapsCid,businessName:client.name,centerLat:client.geo.lat,centerLng:client.geo.lng,gridSize,radiusMiles:Number(radiusMiles),device})});
+    const j=await r.json();
+    if(!r.ok||j.error)return{ok:false,error:j.error||'Failed to generate heat map'};
+    const entry={id:uid(),generatedBy:'live',...j,snapshotDate:today(),businessName:client.name};
+    setData(prev=>{const nd={...prev,clients:prev.clients.map(c=>c.id===client.id?{...c,rankMaps:[entry,...(c.rankMaps||[])]}:c)};saveData(nd);return nd});
+    return{ok:true,entry};
+  }catch(e){
+    return{ok:false,error:'Network error generating heat map.'};
+  }
+}
+
+const HEATMAP_STUCK_TIMEOUT_MS=20*60*1000; // DataForSEO occasionally never resolves a handful of grid tasks (silently, no error) — without a cutoff those maps poll forever. 20min is well past the ~5min standard-queue turnaround.
+
+// Shared with generateLiveHeatMap above, same reasoning — one real
+// implementation, callable from anywhere a pending live map needs polling.
+async function checkLiveHeatMapStatus({client,setData,entry}){
+  const taskIds=(entry.grid||[]).map(p=>p.taskId).filter(Boolean);
+  if(taskIds.length===0)return;
+  const updateClient=(fields)=>{setData(prev=>{const nd={...prev,clients:prev.clients.map(c=>c.id===client.id?{...c,...fields}:c)};saveData(nd);return nd})};
+  const updateRankMap=(id,fields)=>{setData(prev=>{const nd={...prev,clients:prev.clients.map(c=>{
+    if(c.id!==client.id)return c;
+    return{...c,rankMaps:(c.rankMaps||[]).map(m=>m.id===id?{...m,...fields}:m)};
+  })};saveData(nd);return nd})};
+  try{
+    const r=await fetch('/api/heatmap-status',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({taskIds,mapsCid:client.mapsCid||entry.mapsCid,businessName:entry.businessName,businessPhone:client.phone,businessWebsite:client.website})});
+    const j=await r.json();
+    if(!r.ok||j.error)return;
+    if(j.discoveredCid&&!client.mapsCid)updateClient({mapsCid:j.discoveredCid,mapsCidCandidates:null});
+    else if(j.unconfirmedCandidates?.length&&!client.mapsCid)updateClient({mapsCidCandidates:j.unconfirmedCandidates});
+    const rankByTask={};(j.results||[]).forEach(res=>{rankByTask[res.taskId]=res.rank});
+    const grid=(entry.grid||[]).map(p=>p.taskId in rankByTask?{...p,rank:rankByTask[p.taskId],resolved:true}:p);
+    const stuck=Date.now()-(entry.submittedAt||Date.now())>HEATMAP_STUCK_TIMEOUT_MS;
+    if(j.pendingCount===0||stuck){
+      const found=grid.filter(p=>p.rank);
+      const total=grid.length;
+      const top3=grid.filter(p=>p.rank&&p.rank<=3).length;
+      const top4to10=grid.filter(p=>p.rank&&p.rank>3&&p.rank<=10).length;
+      const top11to20=grid.filter(p=>p.rank&&p.rank>10).length;
+      const top21plus=total-found.length;
+      const solv=total?Math.round((top3/total)*1000)/10:0;
+      const avgRank=found.length?Math.round((found.reduce((a,p)=>a+p.rank,0)/found.length)*10)/10:0;
+      updateRankMap(entry.id,{grid,status:'complete',mapsCid:j.discoveredCid||entry.mapsCid,totalPoints:total,top3,top4to10,top11to20,top21plus,avgRank,solv,completedAt:Date.now(),incomplete:stuck&&j.pendingCount>0,competitors:j.competitors||entry.competitors});
+    }else{
+      updateRankMap(entry.id,{grid});
+    }
+  }catch(e){/* silent — user can just check again */}
+}
+
+// Tiny non-interactive preview of a grid's rank distribution for list
+// rows — deliberately NOT a real Leaflet map (dozens of these could be
+// visible in a scrolling list at once; real map instances would be far
+// too heavy). Just colored dots positioned by each point's row/col.
+function MiniHeatDots({grid,size=40}){
+  if(!grid||grid.length===0){
+    return<div className="flex items-center justify-center" style={{width:size,height:size}}><span className="material-symbols-outlined text-muted-stone" style={{fontSize:size*0.5}}>grid_on</span></div>;
+  }
+  const rows=grid.map(p=>p.row), cols=grid.map(p=>p.col);
+  const minR=Math.min(...rows),maxR=Math.max(...rows),minC=Math.min(...cols),maxC=Math.max(...cols);
+  const spanR=Math.max(1,maxR-minR),spanC=Math.max(1,maxC-minC);
+  const dotR=Math.max(1.2,size/(Math.max(spanR,spanC)+1)/2.6);
+  return(
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+      {grid.map((p,i)=>{
+        const cx=((p.col-minC)/spanC)*(size-dotR*2)+dotR;
+        const cy=((p.row-minR)/spanR)*(size-dotR*2)+dotR;
+        const stuck=!!p.taskId&&!p.rank&&!p.resolved;
+        return<circle key={i} cx={cx} cy={cy} r={dotR} fill={stuck?'#9ca3af':heatRankColor(p.rank)} opacity={stuck?0.5:0.9}/>;
+      })}
+    </svg>
+  );
+}
+
 function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword,gridSize,radiusMiles,mapHeight=440}){
   const containerRef=useRef(null);
   const mapRef=useRef(null);
@@ -4657,37 +4916,7 @@ function LiveHeatMapGenerator({client,setData}){
     setPlaceLoading(false);
   };
 
-  const STUCK_TIMEOUT_MS=20*60*1000; // DataForSEO occasionally never resolves a handful of grid tasks (silently, no error) — without a cutoff those maps poll forever. 20min is well past the ~5min standard-queue turnaround.
-
-  const checkStatus=async(entry)=>{
-    const taskIds=(entry.grid||[]).map(p=>p.taskId).filter(Boolean);
-    if(taskIds.length===0)return;
-    try{
-      const r=await fetch('/api/heatmap-status',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({taskIds,mapsCid:client.mapsCid||entry.mapsCid,businessName:entry.businessName,businessPhone:client.phone,businessWebsite:client.website})});
-      const j=await r.json();
-      if(!r.ok||j.error)return;
-      // Only auto-adopt a CID independently confirmed by phone/website match (see shared/heatmap.mts scoreCandidate) —
-      // never a bare name match. If ambiguous, surface candidates for manual confirmation instead of guessing.
-      if(j.discoveredCid&&!client.mapsCid)updateClient({mapsCid:j.discoveredCid,mapsCidCandidates:null});
-      else if(j.unconfirmedCandidates?.length&&!client.mapsCid)updateClient({mapsCidCandidates:j.unconfirmedCandidates});
-      const rankByTask={};(j.results||[]).forEach(res=>{rankByTask[res.taskId]=res.rank});
-      const grid=(entry.grid||[]).map(p=>p.taskId in rankByTask?{...p,rank:rankByTask[p.taskId],resolved:true}:p);
-      const stuck=Date.now()-(entry.submittedAt||Date.now())>STUCK_TIMEOUT_MS;
-      if(j.pendingCount===0||stuck){
-        const found=grid.filter(p=>p.rank);
-        const total=grid.length;
-        const top3=grid.filter(p=>p.rank&&p.rank<=3).length;
-        const top4to10=grid.filter(p=>p.rank&&p.rank>3&&p.rank<=10).length;
-        const top11to20=grid.filter(p=>p.rank&&p.rank>10).length;
-        const top21plus=total-found.length;
-        const solv=total?Math.round((top3/total)*1000)/10:0;
-        const avgRank=found.length?Math.round((found.reduce((a,p)=>a+p.rank,0)/found.length)*10)/10:0;
-        updateRankMap(entry.id,{grid,status:'complete',mapsCid:j.discoveredCid||entry.mapsCid,totalPoints:total,top3,top4to10,top11to20,top21plus,avgRank,solv,completedAt:Date.now(),incomplete:stuck&&j.pendingCount>0,competitors:j.competitors||entry.competitors});
-      }else{
-        updateRankMap(entry.id,{grid});
-      }
-    }catch(e){/* silent — user can just check again */}
-  };
+  const checkStatus=(entry)=>checkLiveHeatMapStatus({client,setData,entry});
 
   // Auto-poll every 30s for every live heat map that's still pending (not just one at a time).
   useEffect(()=>{
@@ -4697,18 +4926,10 @@ function LiveHeatMapGenerator({client,setData}){
   },[pendingMaps.map(m=>m.id).join(',')]); // eslint-disable-line
 
   const generate=async()=>{
-    if(!client.placeId||!client.geo){setGenError('Look up the business location first.');return}
-    if(!keyword.trim()){setGenError('Enter a keyword to track.');return}
-    if(!radiusMiles||Number(radiusMiles)<=0){setGenError('Enter a radius in miles.');return}
     setGenerating(true);setGenError('');
-    try{
-      const r=await fetch('/api/generate-heatmap',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({keyword:keyword.trim(),placeId:client.placeId,mapsCid:client.mapsCid,businessName:client.name,centerLat:client.geo.lat,centerLng:client.geo.lng,gridSize,radiusMiles:Number(radiusMiles),device})});
-      const j=await r.json();
-      if(!r.ok||j.error){setGenError(j.error||'Failed to generate heat map');setGenerating(false);return}
-      const entry={id:uid(),generatedBy:'live',...j,snapshotDate:today(),businessName:client.name};
-      setData(prev=>{const nd={...prev,clients:prev.clients.map(c=>c.id===client.id?{...c,rankMaps:[entry,...(c.rankMaps||[])]}:c)};saveData(nd);return nd});
-      setKeyword('');
-    }catch(e){setGenError('Network error generating heat map.')}
+    const res=await generateLiveHeatMap({client,setData,keyword,gridSize,radiusMiles,device});
+    if(!res.ok){setGenError(res.error);setGenerating(false);return}
+    setKeyword('');
     setGenerating(false);
   };
 
