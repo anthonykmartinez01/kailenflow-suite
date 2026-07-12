@@ -67,6 +67,7 @@ tailwind.config = {
 .onboard-done{background:linear-gradient(90deg,rgba(5,150,105,0.08),transparent);transition:all .3s ease}
 .cal-today{background:#C45A30!important;color:#fff!important;border-radius:6px}
 .cal-event{background:#C45A30;color:#fff;padding:1px 4px;border-radius:4px;font-size:11px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer}
+.cal-event-page{background:#1A1C1E;cursor:default}
 .cal-day:hover{background:rgba(196,90,48,0.08);border-radius:6px}
 /* Stitch design system — prefixed so it never collides with .glass (used app-wide) or other unmigrated views */
 .stitch-glass-card{background:rgba(255,255,255,0.45);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border:1px solid rgba(255,255,255,0.5)}
@@ -2823,7 +2824,21 @@ function CalendarView({data,setData}){
   const [icsUrl,setIcsUrl]=useState(data.calendarUrl||'');
   const [addEventModal,setAddEventModal]=useState(false);
   const [evForm,setEvForm]=useState({title:'',date:today(),time:'09:00',endTime:'10:00',notes:''});
-  const events=data.calendarEvents||[];
+  // Scheduled Pages (data.scheduledPages, each with a goLiveDate) show up on
+  // the calendar as read-only events alongside manual ones — same
+  // goLiveDate-per-page model as a WordPress-style schedule.ts registry,
+  // just already living in this app instead of needing a separate view.
+  // readOnly:true so they can't be deleted via the calendar's own delete
+  // button (that only ever touches data.calendarEvents) — manage/remove
+  // them from the Scheduled Pages tab itself.
+  const scheduledPageEvents=(data.scheduledPages||[]).filter(p=>p.goLiveDate).map(p=>{
+    const c=(data.clients||[]).find(cl=>cl.id===p.clientId);
+    return{
+      id:'sp-'+p.id, title:`${c?c.name+': ':''}${p.title}`, date:p.goLiveDate,
+      time:'',endTime:'',notes:'',readOnly:true,pageStatus:p.status||'scheduled',
+    };
+  });
+  const events=[...(data.calendarEvents||[]),...scheduledPageEvents];
 
   const saveCalUrl=(url)=>{setData(prev=>{const nd={...prev,calendarUrl:url};saveData(nd);return nd})};
   const addEvent=()=>{
@@ -2956,8 +2971,9 @@ function CalendarView({data,setData}){
           {todayEvents.map(ev=>(
             <div key={ev.id} className="flex items-center gap-3 py-1.5">
               <span className="text-xs font-mono text-brand font-bold w-16">{ev.time?fmt12(ev.time):'All day'}</span>
+              {ev.readOnly&&<span className="material-symbols-outlined text-[16px] text-muted-stone flex-shrink-0" title={`Scheduled page — ${ev.pageStatus}`}>{ev.pageStatus==='published'?'check_circle':'description'}</span>}
               <span className="text-sm flex-1">{ev.title}</span>
-              <button onClick={()=>deleteEvent(ev.id)} className="text-red-400 hover:text-red-600 text-xs">✕</button>
+              {!ev.readOnly&&<button onClick={()=>deleteEvent(ev.id)} className="text-red-400 hover:text-red-600 text-xs">✕</button>}
             </div>
           ))}
         </div>
@@ -2980,7 +2996,7 @@ function CalendarView({data,setData}){
               return(
                 <div key={day} className={`cal-day p-1 min-h-[60px] sm:min-h-[80px] border-t border-glass-border`} onClick={()=>{setEvForm(p=>({...p,date:dateStr}));setAddEventModal(true)}}>
                   <span className={`text-xs font-medium inline-block w-6 h-6 flex items-center justify-center rounded-full ${isToday?'cal-today':''}`}>{day}</span>
-                  {dayEvents.slice(0,2).map(ev=><div key={ev.id} className="cal-event" title={ev.title}>{ev.time&&<span className="font-bold mr-1">{fmt12(ev.time)}</span>}{ev.title}</div>)}
+                  {dayEvents.slice(0,2).map(ev=><div key={ev.id} className={ev.readOnly?'cal-event cal-event-page':'cal-event'} title={ev.readOnly?`Scheduled page (${ev.pageStatus}): ${ev.title}`:ev.title}>{ev.time&&<span className="font-bold mr-1">{fmt12(ev.time)}</span>}{ev.readOnly&&(ev.pageStatus==='published'?'✓ ':'📄 ')}{ev.title}</div>)}
                   {dayEvents.length>2&&<div className="text-[10px] text-muted-stone pl-1">+{dayEvents.length-2} more</div>}
                 </div>
               );
@@ -3007,8 +3023,8 @@ function CalendarView({data,setData}){
                     <span className={`text-sm font-bold ${isToday?'text-brand':'text-brand-dark'}`}>{d.getDate()}</span>
                   </div>
                   {dayEvs.map(ev=>(
-                    <div key={ev.id} className="cal-event mb-1 text-[10px]" onClick={()=>deleteEvent(ev.id)}>
-                      {ev.time&&<span className="font-bold">{fmt12(ev.time)} </span>}{ev.title}
+                    <div key={ev.id} className={`cal-event mb-1 text-[10px] ${ev.readOnly?'cal-event-page':''}`} onClick={()=>{if(!ev.readOnly)deleteEvent(ev.id)}} title={ev.readOnly?`Scheduled page (${ev.pageStatus})`:'Click to delete'}>
+                      {ev.readOnly&&(ev.pageStatus==='published'?'✓ ':'📄 ')}{ev.time&&<span className="font-bold">{fmt12(ev.time)} </span>}{ev.title}
                     </div>
                   ))}
                 </div>
@@ -3026,6 +3042,21 @@ function CalendarView({data,setData}){
             <h3 className="font-bold text-brand-dark">{currentDate.toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric',year:'numeric'})}</h3>
             <button onClick={()=>setCurrentDate(new Date(currentDate.getTime()+86400000))} className="touch-target w-10 h-10 rounded-xl bg-white shadow hover:shadow-md flex items-center justify-center">→</button>
           </div>
+          {/* All-day events (no specific time) — scheduled pages always land
+          here since a goLiveDate has no time-of-day, and the hourly grid
+          below only ever shows events that DO have a time, so without this
+          section scheduled pages would be invisible in Day view entirely. */}
+          {(()=>{const allDay=getEventsForDate(isoDate(currentDate)).filter(ev=>!ev.time);return allDay.length>0&&(
+            <div className="border-t border-glass-border py-2 space-y-1">
+              <span className="text-[10px] text-muted-stone uppercase tracking-widest">All day</span>
+              {allDay.map(ev=>(
+                <div key={ev.id} className={`rounded-xl px-3 py-1.5 text-sm flex items-center justify-between ${ev.readOnly?'bg-deep-obsidian text-white':'bg-brand text-white'}`}>
+                  <span>{ev.readOnly&&(ev.pageStatus==='published'?'✓ ':'📄 ')}{ev.title}</span>
+                  {!ev.readOnly&&<button onClick={()=>deleteEvent(ev.id)} className="text-white/70 hover:text-white ml-2">✕</button>}
+                </div>
+              ))}
+            </div>
+          )})()}
           {Array.from({length:14},(_,i)=>i+6).map(hour=>{
             const hourStr=`${String(hour).padStart(2,'0')}:00`;
             const hourEvents=getEventsForDate(isoDate(currentDate)).filter(ev=>ev.time&&ev.time.startsWith(String(hour).padStart(2,'0')));
