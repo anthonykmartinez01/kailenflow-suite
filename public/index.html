@@ -4888,22 +4888,23 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
 
     // No API key for the exact tile provider a reference screenshot used
     // (looks like a custom Mapbox dark style, not free CARTO tiles) — can't
-    // be a literal pixel match. Closest approximation: recolor the CARTO
-    // dark_all tiles (which are blue-black) to the reference's teal-navy
-    // palette in two passes. Pass 1 (mix-blend-mode:'color') replaces the
-    // hue/saturation of every pixel with a solid teal while keeping each
-    // pixel's ORIGINAL luminosity — so water stays darkest, land midtone,
-    // road casings lightest, exactly the structure already baked into the
-    // source tiles, just re-hued instead of blue-black. Pass 2 is the same
-    // brightness lift as before (a multiplicative filter barely moves
-    // near-black pixels, which is why this is additive/screen instead),
-    // now tinted teal instead of blue to land on the reference's lighter
-    // overall tone.
-    const colorizeOverlay=document.createElement('div');
-    colorizeOverlay.style.cssText='position:absolute;inset:0;background:#1a4a52;mix-blend-mode:color;pointer-events:none;z-index:249;';
-    containerRef.current.appendChild(colorizeOverlay);
+    // be a literal pixel match. Closest approximation: tint CARTO's
+    // blue-black dark_all tiles toward teal.
+    //
+    // REVERTED: an earlier attempt stacked a mix-blend-mode:'color' pass
+    // UNDER this one to re-hue every pixel while preserving its luminosity.
+    // That's only correct in theory — 'color' blend derives its result from
+    // SetLum(overlayHue, backdropLuminosity), and dark_all's backdrop
+    // luminosity is already near-zero almost everywhere, so the "recolored"
+    // result was ALSO near-zero-luminosity — i.e. still just black, with no
+    // visible teal at all. It only made the map render as broken/near-blank
+    // (reported live: "map still not fully loading"). A single additive
+    // screen-blend overlay (proven reliable for months before that change)
+    // is the whole fix — screen blending doesn't depend on backdrop
+    // luminosity to inject color, so it reliably lifts near-black pixels to
+    // a visible teal regardless of how dark the source tile is.
     const lightenOverlay=document.createElement('div');
-    lightenOverlay.style.cssText='position:absolute;inset:0;background:rgba(70,120,125,0.55);mix-blend-mode:screen;pointer-events:none;z-index:250;';
+    lightenOverlay.style.cssText='position:absolute;inset:0;background:rgba(45,120,120,0.6);mix-blend-mode:screen;pointer-events:none;z-index:250;';
     containerRef.current.appendChild(lightenOverlay);
 
     // Fit to the grid's real extent instead of a fixed zoom level — a tight
