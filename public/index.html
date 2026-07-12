@@ -941,18 +941,18 @@ function ClientDashboard({client,data,setData,setTab}){
       <div className="rounded-[24px] overflow-hidden relative border border-glass-border" style={heroImage?{backgroundImage:`url("${heroImage}")`,backgroundSize:'cover',backgroundPosition:'center'}:{background:'rgba(255,255,255,0.45)',backdropFilter:'blur(24px)'}}>
         {heroImage&&<div className="absolute inset-0" style={{background:'linear-gradient(to right, rgba(242,236,228,0.97) 0%, rgba(242,236,228,0.92) 30%, rgba(242,236,228,0.6) 60%, rgba(242,236,228,0.3) 100%)'}}/>}
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px] relative">
-          <div className="p-6">
-            <div className="flex items-start gap-4">
-              <div className="w-16 h-16 rounded-full bg-brand/15 text-brand flex items-center justify-center font-bold text-2xl flex-shrink-0">{avatarLetter}</div>
+          <div className="p-5">
+            <div className="flex items-start gap-3">
+              <div className="w-14 h-14 rounded-full bg-brand/15 text-brand flex items-center justify-center font-bold text-xl flex-shrink-0">{avatarLetter}</div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h2 className="text-2xl font-bold text-brand-dark truncate">{c.name}</h2>
+                  <h2 className="text-xl font-bold text-brand-dark truncate">{c.name}</h2>
                   <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Active</span>
                 </div>
                 {c.primaryCategory&&<p className="text-sm text-brand font-medium mt-0.5">{c.primaryCategory}</p>}
               </div>
             </div>
-            <div className="mt-4 space-y-2 text-sm">
+            <div className="mt-3 space-y-1.5 text-sm">
               {(c.address||c.city)&&(
                 <div className="flex items-center gap-2 text-deep-obsidian/70">
                   <span className="material-symbols-outlined text-[18px] text-muted-stone">location_on</span>
@@ -972,18 +972,18 @@ function ClientDashboard({client,data,setData,setTab}){
                 </div>
               )}
             </div>
-            <div className="flex items-center gap-3 mt-4 flex-wrap">
+            <div className="flex items-center gap-3 mt-3 flex-wrap">
               {setTab&&<button onClick={()=>setTab('settings')} className="touch-target px-4 py-2 bg-brand text-white rounded-xl text-sm font-medium hover:bg-brand-hover shadow-lg shadow-brand/20">Business Settings</button>}
               {c.website&&!heroImage&&(
                 <button onClick={checkHeroImage} disabled={heroChecking} className="text-xs text-brand hover:underline disabled:opacity-50">{heroChecking?'Checking...':'Retry background image'}</button>
               )}
             </div>
           </div>
-          <div className="lg:border-l border-glass-border min-h-[220px]">
+          <div className="lg:border-l border-glass-border min-h-[260px]">
             {latestLiveMap?(
-              <LeafletHeatMap points={latestLiveMap.grid} centerLat={latestLiveMap.centerLat} centerLng={latestLiveMap.centerLng} businessName={c.name} address={c.address} keyword={latestLiveMap.keyword} gridSize={latestLiveMap.gridSize} radiusMiles={latestLiveMap.radiusMiles}/>
+              <LeafletHeatMap points={latestLiveMap.grid} centerLat={latestLiveMap.centerLat} centerLng={latestLiveMap.centerLng} businessName={c.name} address={c.address} keyword={latestLiveMap.keyword} gridSize={latestLiveMap.gridSize} radiusMiles={latestLiveMap.radiusMiles} mapHeight={260}/>
             ):(
-              <div className="h-full min-h-[220px] flex flex-col items-center justify-center text-center p-6 bg-warm-sand/90">
+              <div className="h-full min-h-[260px] flex flex-col items-center justify-center text-center p-6 bg-warm-sand/90">
                 <span className="material-symbols-outlined text-3xl text-muted-stone mb-2">map</span>
                 <p className="text-sm text-muted-stone">No rank map yet</p>
                 {setTab&&<button onClick={()=>setTab('rankings')} className="text-xs text-brand hover:underline mt-1">Generate one in Rankings</button>}
@@ -4411,7 +4411,7 @@ const circularGridCount=(n)=>{
   return count;
 };
 
-function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword,gridSize,radiusMiles}){
+function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword,gridSize,radiusMiles,mapHeight=440}){
   const containerRef=useRef(null);
   const mapRef=useRef(null);
   const wrapperRef=useRef(null);
@@ -4562,7 +4562,7 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
           </button>
         </div>
       </div>
-      <div ref={containerRef} className={isFullscreen?'flex-1 min-h-0':''} style={isFullscreen?{position:'relative'}:{height:440,position:'relative'}}/>
+      <div ref={containerRef} className={isFullscreen?'flex-1 min-h-0':''} style={isFullscreen?{position:'relative'}:{height:mapHeight,position:'relative'}}/>
     </div>
   );
 }
