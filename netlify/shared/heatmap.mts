@@ -28,6 +28,12 @@ export function buildGrid(centerLat: number, centerLng: number, gridSize: number
   return points;
 }
 
+// DataForSEO's task_post endpoint caps out at 100 tasks per request — grids
+// larger than 10x10 (e.g. 11x11 = 121 points) must be split into batches or
+// everything past #100 silently comes back with no task id and can never
+// resolve (surfaces as a permanently-stuck row/cluster in the finished map).
+const DATAFORSEO_BATCH_LIMIT = 100;
+
 export async function submitHeatmapTasks(opts: {
   keyword: string; grid: GridPoint[]; device: "mobile" | "desktop"; heatmapId: string;
 }): Promise<{ grid: (GridPoint & { taskId: string | null; taskError?: string })[] }> {
@@ -51,13 +57,17 @@ export async function submitHeatmapTasks(opts: {
     tag: `${opts.heatmapId}:${i}`,
   }));
 
-  const res = await fetch("https://api.dataforseo.com/v3/serp/google/local_finder/task_post", {
-    method: "POST", headers, body: JSON.stringify(tasks),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.status_message || `DataForSEO ${res.status}`);
+  const results: any[] = [];
+  for (let i = 0; i < tasks.length; i += DATAFORSEO_BATCH_LIMIT) {
+    const batch = tasks.slice(i, i + DATAFORSEO_BATCH_LIMIT);
+    const res = await fetch("https://api.dataforseo.com/v3/serp/google/local_finder/task_post", {
+      method: "POST", headers, body: JSON.stringify(batch),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.status_message || `DataForSEO ${res.status}`);
+    results.push(...(data.tasks || []));
+  }
 
-  const results: any[] = data.tasks || [];
   const gridWithTasks = opts.grid.map((p, i) => ({
     ...p,
     taskId: results[i]?.id || null,
