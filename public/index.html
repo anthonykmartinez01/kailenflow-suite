@@ -4571,6 +4571,51 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
   );
 }
 
+// Every grid point's local_finder response already lists every OTHER
+// business ranking there, not just the client's — the backend now keeps
+// that (previously discarded) data and aggregates it per map. No extra
+// DataForSEO calls, no extra cost — same data already paid for.
+// "Visibility" here means the same thing it does everywhere else in this
+// app: % of grid points where that business ranks in the top 3.
+function CompetitorsPanel({competitors,clientCid}){
+  if(!competitors||competitors.length===0){
+    return(
+      <div className="stitch-glass-card rounded-[20px] p-5 text-center">
+        <p className="text-sm text-muted-stone">No competitor data captured for this map.</p>
+        <p className="text-[11px] text-muted-stone mt-1">Maps generated before this feature shipped won't have it — regenerate to capture competitors.</p>
+      </div>
+    );
+  }
+  return(
+    <div className="stitch-glass-card rounded-[20px] p-4">
+      <div className="flex items-center justify-between mb-2 px-1">
+        <h4 className="font-bold text-brand-dark text-sm">Top Competitors</h4>
+        <span className="text-xs text-muted-stone">{competitors.length} found</span>
+      </div>
+      <div className="space-y-0.5 max-h-[420px] overflow-y-auto">
+        {competitors.map((c,i)=>{
+          const isTarget=clientCid&&c.cid===clientCid;
+          return(
+            <div key={c.cid} className={`flex items-center justify-between gap-2 py-2 px-2 rounded-lg ${isTarget?'bg-brand/10 border border-brand/30':'border-b border-glass-border last:border-0'}`}>
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="text-[11px] text-muted-stone w-4 flex-shrink-0 text-right">{i+1}</span>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-deep-obsidian/85 truncate">{c.title}{isTarget&&<span className="text-[10px] text-brand font-bold ml-1">(YOU)</span>}</p>
+                  {c.category&&<p className="text-[11px] text-muted-stone truncate">{c.category}</p>}
+                </div>
+              </div>
+              <div className="flex items-center gap-3 flex-shrink-0 text-right">
+                <div><p className="text-xs font-bold text-brand-dark">{c.visibilityPct}%</p><p className="text-[9px] text-muted-stone uppercase tracking-wide">Vis</p></div>
+                <div><p className="text-xs font-bold text-brand-dark">{c.avgRank}</p><p className="text-[9px] text-muted-stone uppercase tracking-wide">Rank</p></div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function LiveHeatMapGenerator({client,setData}){
   const [placeLoading,setPlaceLoading]=useState(false);
   const [placeError,setPlaceError]=useState('');
@@ -4637,7 +4682,7 @@ function LiveHeatMapGenerator({client,setData}){
         const top21plus=total-found.length;
         const solv=total?Math.round((top3/total)*1000)/10:0;
         const avgRank=found.length?Math.round((found.reduce((a,p)=>a+p.rank,0)/found.length)*10)/10:0;
-        updateRankMap(entry.id,{grid,status:'complete',mapsCid:j.discoveredCid||entry.mapsCid,totalPoints:total,top3,top4to10,top11to20,top21plus,avgRank,solv,completedAt:Date.now(),incomplete:stuck&&j.pendingCount>0});
+        updateRankMap(entry.id,{grid,status:'complete',mapsCid:j.discoveredCid||entry.mapsCid,totalPoints:total,top3,top4to10,top11to20,top21plus,avgRank,solv,completedAt:Date.now(),incomplete:stuck&&j.pendingCount>0,competitors:j.competitors||entry.competitors});
       }else{
         updateRankMap(entry.id,{grid});
       }
@@ -4836,7 +4881,10 @@ function LiveHeatMapGenerator({client,setData}){
                 )}
               </div>
               {expanded===m.id&&m.status==='complete'&&(
-                <div className="mt-3"><LeafletHeatMap points={m.grid} centerLat={m.centerLat} centerLng={m.centerLng} businessName={m.businessName} address={client.address} keyword={m.keyword} gridSize={m.gridSize} radiusMiles={m.radiusMiles}/></div>
+                <div className="mt-3 grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-3 items-start">
+                  <LeafletHeatMap points={m.grid} centerLat={m.centerLat} centerLng={m.centerLng} businessName={m.businessName} address={client.address} keyword={m.keyword} gridSize={m.gridSize} radiusMiles={m.radiusMiles}/>
+                  <CompetitorsPanel competitors={m.competitors} clientCid={m.mapsCid||client.mapsCid}/>
+                </div>
               )}
             </div>
           ))}

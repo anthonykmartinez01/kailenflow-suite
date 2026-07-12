@@ -121,6 +121,11 @@ function fuzzyMatch(title: string, businessName: string): boolean {
 
 export interface CidCandidate { cid: string; title: string; phone?: string; domain?: string; rating?: number; votes?: number; }
 
+export interface CompetitorStat {
+  cid: string; title: string; category?: string; rating?: number; votes?: number;
+  points: number; visibilityPct: number; avgRank: number;
+}
+
 // Scores a fuzzy-name-matched item against known ground-truth (the client's
 // own phone number / website domain, both already captured from onboarding —
 // NOT derived from this search). Phone and domain are unique per physical
@@ -145,7 +150,7 @@ export async function pollHeatmapTasks(opts: {
   taskIds: string[]; mapsCid?: string; businessName?: string; businessPhone?: string; businessWebsite?: string;
 }): Promise<{
   results: { taskId: string; rank: number | null }[]; readyCount: number; pendingCount: number;
-  discoveredCid?: string; unconfirmedCandidates?: CidCandidate[];
+  discoveredCid?: string; unconfirmedCandidates?: CidCandidate[]; competitors?: CompetitorStat[];
 }> {
   const headers = dataForSeoHeaders();
   if (!headers) throw new Error("DATAFORSEO_LOGIN/PASSWORD not configured on the server");
@@ -225,12 +230,52 @@ export async function pollHeatmapTasks(opts: {
     return { taskId: f.taskId, rank: match ? match.rank_absolute : null };
   });
 
+  // Every grid point's local_finder response lists EVERY business ranking
+  // there, not just the client's — this data is already being paid for and
+  // fetched with every poll, it was just being discarded after extracting
+  // the client's own rank. Aggregating it into a competitor leaderboard is
+  // free: no extra DataForSEO calls, just keeping data already in hand.
+  // "Visibility" is defined the same way it is everywhere else in this
+  // app (top-3 presence %, i.e. Share of Local Voice) for consistency,
+  // not whatever a different tool might mean by the word.
+  const compAgg = new Map<string, { title: string; category?: string; rating?: number; votes?: number; count: number; top3Count: number; rankSum: number }>();
+  const totalPoints = ready.length;
+  for (const f of ready) {
+    for (const it of f.items) {
+      if (!it.cid || typeof it.rank_absolute !== "number") continue;
+      const rank = it.rank_absolute;
+      const existing = compAgg.get(it.cid);
+      if (existing) {
+        existing.count++;
+        existing.rankSum += rank;
+        if (rank <= 3) existing.top3Count++;
+      } else {
+        compAgg.set(it.cid, {
+          title: it.title, category: it.category, rating: it.rating?.value, votes: it.rating?.votes_count,
+          count: 1, rankSum: rank, top3Count: rank <= 3 ? 1 : 0,
+        });
+      }
+    }
+  }
+  const competitors: CompetitorStat[] | undefined = totalPoints > 0
+    ? [...compAgg.entries()]
+        .map(([compCid, v]) => ({
+          cid: compCid, title: v.title, category: v.category, rating: v.rating, votes: v.votes,
+          points: v.count,
+          visibilityPct: Math.round((v.top3Count / totalPoints) * 1000) / 10,
+          avgRank: Math.round((v.rankSum / v.count) * 10) / 10,
+        }))
+        .sort((a, b) => b.visibilityPct - a.visibilityPct || a.avgRank - b.avgRank)
+        .slice(0, 30)
+    : undefined;
+
   return {
     results,
     readyCount: results.length,
     pendingCount: opts.taskIds.length - results.length,
     discoveredCid,
     unconfirmedCandidates,
+    competitors,
   };
 }
 

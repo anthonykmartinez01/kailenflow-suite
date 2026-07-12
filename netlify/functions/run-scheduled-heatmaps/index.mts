@@ -90,7 +90,7 @@ export default async (req: Request, _ctx: Context) => {
           m.grid = (m.grid || []).map((p: any) => (p.taskId in rankByTask ? { ...p, rank: rankByTask[p.taskId], resolved: true } : p));
           const stuck = now - (m.submittedAt || now) > STUCK_TIMEOUT_MS;
           if (result.pendingCount === 0 || stuck) {
-            Object.assign(m, summarizeGrid(m.grid), { status: "complete", mapsCid: result.discoveredCid || client.mapsCid || m.mapsCid, completedAt: now, incomplete: stuck && result.pendingCount > 0 });
+            Object.assign(m, summarizeGrid(m.grid), { status: "complete", mapsCid: result.discoveredCid || client.mapsCid || m.mapsCid, completedAt: now, incomplete: stuck && result.pendingCount > 0, competitors: result.competitors || m.competitors });
             log.push(`finalized ${client.name} / ${m.keyword}${stuck && result.pendingCount > 0 ? " (partial — some points never resolved)" : ""}`);
           }
         } catch (e: any) {
