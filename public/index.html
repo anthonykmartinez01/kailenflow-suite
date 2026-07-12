@@ -918,27 +918,33 @@ function ClientDashboard({client,data,setData,setTab}){
   // from the client's actual GitHub repo (client.publishing.repo, already
   // set in Settings for the indexing-automation feature) via the same
   // /api/scheduled-pages-status endpoint IndexingDashboard uses cross-
-  // client — reads and parses schedule.ts straight from the repo, no
-  // separate manual tracking to keep in sync.
-  const [ghSchedule,setGhSchedule]=useState(null); // null=loading/no repo, else {pages,error}
+  // client. Two DELIBERATELY independent numbers from that one call:
+  //   - "Scheduled Pages" = schedule.ts entries still in the future
+  //   - "Generated Pages" = pageCount, a real count of page files in the
+  //     repo's pages directory (client.publishing.pagesDir) — NOT derived
+  //     from schedule.ts. A page published by hand (committed directly,
+  //     skipping the schedule.ts flow entirely) still needs to count here;
+  //     if this used schedule.ts's total instead, every manually-published
+  //     page would silently be missing from the count.
+  const [ghSchedule,setGhSchedule]=useState(null); // null=loading/no repo, else {pages,pageCount,error}
   const ghFetchedForRef=useRef(null);
   useEffect(()=>{
     if(!c.publishing?.repo){setGhSchedule(null);ghFetchedForRef.current=null;return}
-    const key=c.id+':'+c.publishing.repo;
+    const key=c.id+':'+c.publishing.repo+':'+c.publishing.branch+':'+c.publishing.pagesDir;
     if(ghFetchedForRef.current===key)return;
     ghFetchedForRef.current=key;
     setGhSchedule(null);
     (async()=>{
       try{
-        const r=await fetch('/api/scheduled-pages-status',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({repos:[{name:c.name,repo:c.publishing.repo,branch:c.publishing.branch||'main'}]})});
+        const r=await fetch('/api/scheduled-pages-status',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({repos:[{name:c.name,repo:c.publishing.repo,branch:c.publishing.branch||'main',pagesDir:c.publishing.pagesDir||'src/pages'}]})});
         const j=await r.json();
         const result=j.results?.[0];
-        if(!r.ok||j.error||result?.error)setGhSchedule({pages:[],error:result?.error||j.error||'Failed to load'});
-        else setGhSchedule({pages:result?.pages||[],error:null});
-      }catch(e){setGhSchedule({pages:[],error:'Network error'})}
+        if(!r.ok||j.error||result?.error)setGhSchedule({pages:[],pageCount:null,error:result?.error||j.error||'Failed to load'});
+        else setGhSchedule({pages:result?.pages||[],pageCount:result?.pageCount??null,error:null});
+      }catch(e){setGhSchedule({pages:[],pageCount:null,error:'Network error'})}
     })();
-  },[c.id,c.publishing?.repo,c.publishing?.branch]); // eslint-disable-line
-  const ghTotalPages=ghSchedule?.pages?.length??null;
+  },[c.id,c.publishing?.repo,c.publishing?.branch,c.publishing?.pagesDir]); // eslint-disable-line
+  const ghTotalPages=ghSchedule?.pageCount??null;
   const ghScheduledPages=ghSchedule?.pages?.filter(p=>{const t=new Date(p.date+'T00:00:00Z').getTime();return Number.isFinite(t)&&t>Date.now()}).length??null;
   const lastCrawl=(c.contentGap||{}).lastCrawl;
   const pageSpeedScore=c.pageSpeed?.mobile?.score;
