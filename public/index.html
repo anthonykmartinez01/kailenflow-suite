@@ -4275,6 +4275,411 @@ function GSCSection({client,setData,data}){
   );
 }
 
+// ─── Google Analytics (GA4) ───
+// Mirrors GSCSection's exact OAuth/state-machine pattern (same Google
+// Identity Services token client, same restore/reconnect flow) — just a
+// different scope and Google API. Uses the SAME OAuth client ID as Search
+// Console since it's one Google Cloud project; only the requested scope
+// differs. No restricted-access application needed for this one, unlike
+// Business Profile — analytics.readonly is a standard self-service scope.
+function GA4Section({client,setData,data}){
+  const GA_CLIENT_ID='612120587213-tr29nkokkjj3eijo455dhr82emstphtn.apps.googleusercontent.com'; // same OAuth client as Search Console, different scope
+  const GA_SCOPE='https://www.googleapis.com/auth/analytics.readonly';
+
+  const GA_TOKEN_KEY='kailenflow_ga4_token';
+  const [gaState,setGaState]=useState('disconnected'); // disconnected|connecting|loading|loaded|error|nodata|expired
+  const [gaToken,setGaToken]=useState(null);
+  const [gaEmail,setGaEmail]=useState('');
+  const [gaError,setGaError]=useState('');
+  const [gaProperties,setGaProperties]=useState([]);
+  const [gaSelectedProperty,setGaSelectedProperty]=useState('');
+  const [gaData,setGaData]=useState(null);
+  const tokenClientRef=useRef(null);
+  const hasRestoredRef=useRef(false);
+
+  const saveGaToken=(token,expiresIn,email)=>{
+    const expiresAt=Date.now()+(expiresIn||3600)*1000;
+    localStorage.setItem(GA_TOKEN_KEY,JSON.stringify({token,expiresAt,email:email||''}));
+  };
+  const clearGaToken=()=>{localStorage.removeItem(GA_TOKEN_KEY)};
+
+  const handleToken=(accessToken,email)=>{
+    setGaToken(accessToken);
+    setGaState('loading');
+    if(email)setGaEmail(email);
+    else fetch('https://www.googleapis.com/oauth2/v3/userinfo',{headers:{'Authorization':'Bearer '+accessToken}})
+      .then(r=>r.json()).then(d=>{
+        if(d.email){setGaEmail(d.email);
+          const saved=JSON.parse(localStorage.getItem(GA_TOKEN_KEY)||'{}');
+          if(saved.token)localStorage.setItem(GA_TOKEN_KEY,JSON.stringify({...saved,email:d.email}));
+        }
+      }).catch(()=>{});
+    fetchGaProperties(accessToken);
+  };
+
+  useEffect(()=>{
+    if(hasRestoredRef.current)return;
+    hasRestoredRef.current=true;
+    try{
+      const saved=JSON.parse(localStorage.getItem(GA_TOKEN_KEY)||'null');
+      if(!saved||!saved.token)return;
+      if(saved.expiresAt>Date.now()+60000){
+        setGaToken(saved.token);
+        if(saved.email)setGaEmail(saved.email);
+        setGaState('loading');
+        fetchGaProperties(saved.token);
+      }else{
+        if(saved.email)setGaEmail(saved.email);
+        setGaState('connecting');
+        const trysilent=()=>{
+          if(tokenClientRef.current){tokenClientRef.current.requestAccessToken({prompt:''})}
+          else{setTimeout(trysilent,500)}
+        };
+        setTimeout(trysilent,300);
+      }
+    }catch(e){}
+  },[]);
+
+  useEffect(()=>{
+    if(typeof google==='undefined'||!google.accounts)return;
+    tokenClientRef.current=google.accounts.oauth2.initTokenClient({
+      client_id:GA_CLIENT_ID,
+      scope:GA_SCOPE,
+      callback:(resp)=>{
+        if(resp.error){setGaState('error');setGaError('Authorization failed: '+(resp.error_description||resp.error));return}
+        saveGaToken(resp.access_token,resp.expires_in,'');
+        handleToken(resp.access_token,null);
+      }
+    });
+  },[]);
+
+  const gaApiFetch=async(url,token,options={})=>{
+    const res=await fetch(url,{...options,headers:{'Authorization':'Bearer '+token,'Content-Type':'application/json',...(options.headers||{})}});
+    if(res.status===401){clearGaToken();setGaState('expired');setGaError('Session expired. Please reconnect.');throw new Error('token_expired')}
+    if(!res.ok){const err=await res.json().catch(()=>({}));throw new Error(err.error?.message||'API error '+res.status)}
+    return res.json();
+  };
+
+  // Get properties already assigned to OTHER clients
+  const usedProperties=useMemo(()=>{
+    if(!data||!data.clients)return[];
+    return data.clients.filter(c=>c.id!==client.id&&c.ga4Property).map(c=>c.ga4Property);
+  },[data,client.id]);
+
+  const fetchGaProperties=async(token)=>{
+    try{
+      const apiData=await gaApiFetch('https://analyticsadmin.googleapis.com/v1beta/accountSummaries?pageSize=200',token);
+      const allProps=(apiData.accountSummaries||[]).flatMap(a=>(a.propertySummaries||[]).map(p=>({property:p.property,displayName:p.displayName||p.property})));
+      setGaProperties(allProps);
+
+      // 1. If client has a saved property and it exists in the list, use it
+      if(client.ga4Property&&allProps.some(p=>p.property===client.ga4Property)){
+        setGaSelectedProperty(client.ga4Property);
+        fetchGaData(token,client.ga4Property);
+        return;
+      }
+
+      // Filter out properties used by other clients
+      const available=allProps.filter(p=>!usedProperties.includes(p.property));
+
+      // 2. Try auto-matching client name/website against property display names
+      const cw=(client.website||'').replace(/^https?:\/\//,'').replace(/^www\./,'').replace(/\/$/,'').toLowerCase();
+      const cn=(client.name||'').toLowerCase();
+      const match=(cw||cn)?available.find(p=>{
+        const dn=p.displayName.toLowerCase();
+        return(cw&&dn.includes(cw))||(cn&&dn.includes(cn));
+      }):null;
+
+      if(match){
+        savePropertyToClient(match.property);
+        setGaSelectedProperty(match.property);fetchGaData(token,match.property);
+      }
+      else if(available.length===1){
+        savePropertyToClient(available[0].property);
+        setGaSelectedProperty(available[0].property);fetchGaData(token,available[0].property);
+      }
+      else if(available.length>1){setGaState('loaded');setGaData(null)}
+      else{setGaState('nodata');setGaError('No available GA4 properties found. All properties may already be assigned to other clients.')}
+    }catch(e){
+      if(e.message!=='token_expired'){setGaState('error');setGaError('Failed to load GA4 properties: '+e.message)}
+    }
+  };
+
+  // Save selected GA4 property to client data
+  const savePropertyToClient=(propertyId)=>{
+    if(setData){
+      setData(prev=>{
+        const nd={...prev,clients:prev.clients.map(c=>c.id===client.id?{...c,ga4Property:propertyId}:c)};
+        saveData(nd);return nd;
+      });
+    }
+  };
+
+  const fetchGaData=async(token,propertyId)=>{
+    setGaState('loading');
+    const end=new Date();end.setDate(end.getDate()-1);
+    const start=new Date();start.setDate(start.getDate()-29);
+    const fmtDate=d=>d.toISOString().split('T')[0];
+    const dateRanges=[{startDate:fmtDate(start),endDate:fmtDate(end)}];
+    const baseUrl=`https://analyticsdata.googleapis.com/v1beta/${propertyId}:runReport`;
+
+    try{
+      const [summary,daily,pages,channels]=await Promise.all([
+        gaApiFetch(baseUrl,token,{method:'POST',body:JSON.stringify({dateRanges,metrics:[{name:'activeUsers'},{name:'sessions'},{name:'conversions'},{name:'engagementRate'}]})}),
+        gaApiFetch(baseUrl,token,{method:'POST',body:JSON.stringify({dateRanges,dimensions:[{name:'date'}],metrics:[{name:'sessions'},{name:'activeUsers'}],orderBys:[{dimension:{dimensionName:'date'}}]})}),
+        gaApiFetch(baseUrl,token,{method:'POST',body:JSON.stringify({dateRanges,dimensions:[{name:'pagePath'}],metrics:[{name:'screenPageViews'},{name:'sessions'}],orderBys:[{metric:{metricName:'screenPageViews'},desc:true}],limit:10})}),
+        gaApiFetch(baseUrl,token,{method:'POST',body:JSON.stringify({dateRanges,dimensions:[{name:'sessionDefaultChannelGroup'}],metrics:[{name:'sessions'}],orderBys:[{metric:{metricName:'sessions'},desc:true}]})})
+      ]);
+
+      const sRow=summary.rows?.[0];
+      if(!sRow){setGaState('nodata');setGaError('No analytics data available for this property in the last 28 days.');return}
+
+      const mv=(row,i)=>parseFloat(row.metricValues?.[i]?.value||0);
+      setGaData({
+        totalUsers:mv(sRow,0),
+        totalSessions:mv(sRow,1),
+        totalConversions:mv(sRow,2),
+        avgEngagementRate:mv(sRow,3)*100,
+        daily:(daily.rows||[]).map(r=>({date:r.dimensionValues[0].value,sessions:parseFloat(r.metricValues[0].value||0),users:parseFloat(r.metricValues[1].value||0)})),
+        pages:(pages.rows||[]).map(r=>({page:r.dimensionValues[0].value,views:parseFloat(r.metricValues[0].value||0),sessions:parseFloat(r.metricValues[1].value||0)})),
+        channels:(channels.rows||[]).map(r=>({channel:r.dimensionValues[0].value,sessions:parseFloat(r.metricValues[0].value||0)}))
+      });
+      setGaState('loaded');
+    }catch(e){
+      if(e.message!=='token_expired'){setGaState('error');setGaError('Failed to load GA4 data: '+e.message)}
+    }
+  };
+
+  const connectGa=()=>{
+    if(!tokenClientRef.current){setGaError('Google Identity Services not loaded. Please refresh.');setGaState('error');return}
+    setGaState('connecting');setGaError('');
+    tokenClientRef.current.requestAccessToken();
+  };
+
+  const handlePropertyChange=(propertyId)=>{
+    setGaSelectedProperty(propertyId);
+    savePropertyToClient(propertyId);
+    if(gaToken)fetchGaData(gaToken,propertyId);
+  };
+
+  // GA4's date dimension comes back as "YYYYMMDD" with no separators
+  const fmtGaDate=(s)=>s&&s.length===8?`${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`:s;
+  const engColor=(v)=>v>60?'#059669':v>40?'#d97706':'#dc2626';
+
+  const GaDailyChart=({dailyData})=>{
+    if(!dailyData||dailyData.length===0)return null;
+    const maxSessions=Math.max(...dailyData.map(d=>d.sessions),1);
+    const barW=Math.max(Math.floor(600/dailyData.length)-2,4);
+    return(
+      <div className="stitch-glass-card rounded-[32px] p-8 fade-in">
+        <div className="mb-6">
+          <h4 className="text-lg font-bold text-brand-dark">Sessions Over Time</h4>
+          <p className="text-sm text-muted-stone">Real Google Analytics data — last 28 days</p>
+        </div>
+        <div className="overflow-x-auto">
+          <div className="flex items-end gap-0.5" style={{minWidth:dailyData.length*12,height:160}}>
+            {dailyData.map((d,i)=>{
+              const dateLabel=fmtGaDate(d.date).slice(5);
+              const h=Math.max((d.sessions/maxSessions)*140,2);
+              return(
+                <div key={i} className="flex flex-col items-center flex-shrink-0" style={{width:barW+4}}>
+                  <div className="relative group rounded-t bg-brand/40 hover:bg-brand transition-all duration-500 cursor-help" style={{width:barW,height:h}}>
+                    <div className="absolute -top-9 left-1/2 -translate-x-1/2 bg-brand-dark text-white px-2 py-1 rounded text-[10px] opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap z-10">{fmtGaDate(d.date)}: {d.sessions} sessions</div>
+                  </div>
+                  {i%Math.ceil(dailyData.length/7)===0&&<span className="text-[9px] text-muted-stone mt-1 whitespace-nowrap">{dateLabel}</span>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Disconnected state
+  if(gaState==='disconnected'){
+    return(
+      <div className="stitch-glass-card rounded-[24px] p-6 fade-in font-manrope">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-lg font-bold text-brand-dark">Google Analytics</h4>
+        </div>
+        <p className="text-sm text-muted-stone mb-4">Connect Google Analytics (GA4) to see sessions, users, conversions, top pages, and traffic channels.</p>
+        <button onClick={connectGa} className="touch-target px-4 py-2 bg-brand text-white rounded-xl text-sm font-medium hover:bg-brand-hover transition-all shadow-lg shadow-brand/20">Connect Google Analytics</button>
+      </div>
+    );
+  }
+
+  // Connecting state
+  if(gaState==='connecting'){
+    return(
+      <div className="stitch-glass-card rounded-[24px] p-6 fade-in font-manrope">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-lg font-bold text-brand-dark">Google Analytics</h4>
+        </div>
+        <div className="text-center py-8">
+          <div className="inline-block w-8 h-8 border-4 border-brand border-t-transparent rounded-full animate-spin mb-2"/>
+          <p className="text-sm text-muted-stone">Connecting to Google...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Loading state
+  if(gaState==='loading'){
+    return(
+      <div className="stitch-glass-card rounded-[24px] p-6 fade-in font-manrope">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-lg font-bold text-brand-dark">Google Analytics</h4>
+          <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium">Connected</span>
+        </div>
+        <div className="text-center py-8">
+          <div className="inline-block w-8 h-8 border-4 border-brand border-t-transparent rounded-full animate-spin mb-2"/>
+          <p className="text-sm text-muted-stone">Loading Analytics data...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Error state
+  if(gaState==='error'||gaState==='expired'){
+    return(
+      <div className="stitch-glass-card rounded-[24px] p-6 fade-in font-manrope">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-lg font-bold text-brand-dark">Google Analytics</h4>
+        </div>
+        <div className="bg-red-50 text-red-700 rounded-xl p-3 text-sm mb-3">{gaError}</div>
+        <button onClick={()=>{clearGaToken();setGaState('disconnected');setGaError('');setGaToken(null);setGaEmail('');setGaProperties([]);setGaSelectedProperty('');setGaData(null)}} className="touch-target px-4 py-2 bg-brand text-white rounded-xl text-sm font-medium hover:bg-brand-hover transition-all shadow-lg shadow-brand/20">{gaState==='expired'?'Reconnect':'Try Again'}</button>
+      </div>
+    );
+  }
+
+  // No data state
+  if(gaState==='nodata'){
+    return(
+      <div className="stitch-glass-card rounded-[24px] p-6 fade-in font-manrope">
+        <div className="flex items-center justify-between mb-3">
+          <h4 className="text-lg font-bold text-brand-dark">Google Analytics</h4>
+          <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium">Connected</span>
+        </div>
+        {gaEmail&&<p className="text-xs text-muted-stone mb-2">{gaEmail}</p>}
+        <div className="bg-yellow-50 text-yellow-700 rounded-xl p-3 text-sm mb-3">{gaError||'No data available for this property.'}</div>
+        {gaProperties.length>1&&(
+          <div className="mb-3">
+            <label className="text-xs text-muted-stone block mb-1">Switch property:</label>
+            <select value={gaSelectedProperty} onChange={e=>handlePropertyChange(e.target.value)} className="touch-target w-full px-3 py-2 border border-glass-border rounded-xl text-sm focus:ring-1 focus:ring-brand focus:outline-none">
+              {gaProperties.filter(p=>!usedProperties.includes(p.property)||p.property===gaSelectedProperty).map(p=><option key={p.property} value={p.property}>{p.displayName}</option>)}
+            </select>
+          </div>
+        )}
+        <button onClick={()=>{clearGaToken();setGaState('disconnected');setGaToken(null);setGaEmail('');setGaProperties([]);setGaSelectedProperty('');setGaData(null);setGaError('')}} className="touch-target px-4 py-2 bg-black/5 text-deep-obsidian/70 rounded-xl text-sm font-medium hover:bg-black/10 transition-colors">Disconnect</button>
+      </div>
+    );
+  }
+
+  // Loaded state — full dashboard
+  const totalChannelSessions=gaData?.channels?.reduce((a,c)=>a+c.sessions,0)||1;
+
+  return(
+    <div className="space-y-4 fade-in font-manrope">
+      {/* Header */}
+      <div className="stitch-glass-card rounded-[24px] p-6">
+        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+          <div className="flex items-center gap-3">
+            <h4 className="text-lg font-bold text-brand-dark">Google Analytics</h4>
+            <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium">Connected</span>
+          </div>
+          <button onClick={()=>{clearGaToken();setGaState('disconnected');setGaToken(null);setGaEmail('');setGaProperties([]);setGaSelectedProperty('');setGaData(null);setGaError('')}} className="text-xs text-muted-stone hover:text-brand-dark transition-colors">Disconnect</button>
+        </div>
+        {gaEmail&&<p className="text-xs text-muted-stone mb-2">{gaEmail}</p>}
+        {gaProperties.length>1&&(
+          <div>
+            <label className="text-xs text-muted-stone block mb-1">Property:</label>
+            <select value={gaSelectedProperty} onChange={e=>handlePropertyChange(e.target.value)} className="touch-target w-full px-3 py-2 border border-glass-border rounded-xl text-sm bg-white focus:ring-1 focus:ring-brand focus:outline-none">
+              {gaProperties.filter(p=>!usedProperties.includes(p.property)||p.property===gaSelectedProperty).map(p=><option key={p.property} value={p.property}>{p.displayName}</option>)}
+            </select>
+          </div>
+        )}
+        {gaProperties.length<=1&&gaSelectedProperty&&<p className="text-xs text-muted-stone">{(gaProperties.find(p=>p.property===gaSelectedProperty)||{}).displayName||gaSelectedProperty}</p>}
+      </div>
+
+      {gaData&&(
+        <>
+          {/* 4 Big Stat Cards */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="stitch-glass-card stitch-hover-lift rounded-[20px] p-5 text-center">
+              <p className="text-xs text-muted-stone mb-1">Users</p>
+              <p className="text-2xl font-bold text-brand-dark">{gaData.totalUsers.toLocaleString()}</p>
+            </div>
+            <div className="stitch-glass-card stitch-hover-lift rounded-[20px] p-5 text-center">
+              <p className="text-xs text-muted-stone mb-1">Sessions</p>
+              <p className="text-2xl font-bold text-brand-dark">{gaData.totalSessions.toLocaleString()}</p>
+            </div>
+            <div className="stitch-glass-card stitch-hover-lift rounded-[20px] p-5 text-center">
+              <p className="text-xs text-muted-stone mb-1">Conversions</p>
+              <p className="text-2xl font-bold text-brand-dark">{gaData.totalConversions.toLocaleString()}</p>
+            </div>
+            <div className="stitch-glass-card stitch-hover-lift rounded-[20px] p-5 text-center">
+              <p className="text-xs text-muted-stone mb-1">Engagement Rate</p>
+              <p className="text-2xl font-bold" style={{color:engColor(gaData.avgEngagementRate)}}>{gaData.avgEngagementRate.toFixed(1)}%</p>
+            </div>
+          </div>
+
+          {/* Sessions Chart */}
+          <GaDailyChart dailyData={gaData.daily}/>
+
+          {/* Top Pages Table */}
+          {gaData.pages.length>0&&(
+            <div className="stitch-glass-card rounded-[24px] p-6">
+              <h5 className="font-semibold text-brand-dark text-sm mb-3">Top Pages</h5>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead><tr className="text-left text-xs text-muted-stone border-b border-glass-border">
+                    <th className="pb-2 pr-2">Page</th><th className="pb-2 pr-2 text-right">Views</th><th className="pb-2 text-right">Sessions</th>
+                  </tr></thead>
+                  <tbody>
+                    {gaData.pages.map((p,i)=>{
+                      let displayUrl=p.page;
+                      if(displayUrl.length>40)displayUrl=displayUrl.slice(0,37)+'...';
+                      return(
+                        <tr key={i} className="border-b border-glass-border last:border-0">
+                          <td className="py-2 pr-2 text-deep-obsidian/70 max-w-[200px] truncate" title={p.page}>{displayUrl}</td>
+                          <td className="py-2 pr-2 text-right font-medium">{p.views.toLocaleString()}</td>
+                          <td className="py-2 text-right text-muted-stone">{p.sessions.toLocaleString()}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Channel Breakdown */}
+          {gaData.channels.length>0&&(
+            <div>
+              <h5 className="font-semibold text-brand-dark text-sm mb-3">Traffic Channels</h5>
+              <div className="space-y-2">
+                {gaData.channels.map((c,i)=>{
+                  const pct=((c.sessions/totalChannelSessions)*100).toFixed(1);
+                  return(
+                    <div key={i} className="stitch-glass-card rounded-[16px] p-3 flex items-center justify-between">
+                      <span className="text-sm font-medium text-deep-obsidian/80">{c.channel}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-stone">{pct}%</span>
+                        <span className="text-sm font-bold text-brand-dark">{c.sessions.toLocaleString()}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════
 // FEATURE: Rank Maps Tab (per client) — AI-powered heat map analysis
 // ═══════════════════════════════════════════
@@ -4321,7 +4726,6 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
   useEffect(()=>{
     const onFsChange=()=>{
       setIsFullscreen(document.fullscreenElement===wrapperRef.current);
-      setTimeout(()=>mapRef.current?.invalidateSize(),60);
     };
     document.addEventListener('fullscreenchange',onFsChange);
     return()=>document.removeEventListener('fullscreenchange',onFsChange);
@@ -4334,6 +4738,18 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
   useEffect(()=>{
     if(!containerRef.current||typeof L==='undefined'||points.length===0)return;
     if(mapRef.current){mapRef.current.remove();mapRef.current=null}
+    // map.remove() only tears down Leaflet's own panes, not the lighten
+    // overlay div we append manually below — without this, rebuilding the
+    // map (e.g. on every fullscreen toggle) stacks a fresh overlay on top
+    // of the leftover one each time, compounding the lighten effect.
+    containerRef.current.innerHTML='';
+    // Rebuilding the whole map (rather than just calling invalidateSize())
+    // on every fullscreen toggle guarantees the tile layer requests tiles
+    // for the ACTUAL final container size — invalidateSize() alone left the
+    // tile layer still sized/positioned for the small pre-fullscreen
+    // viewport, which rendered as a solid navy fill (our own lighten
+    // overlay showing through with no tiles loaded behind it) once
+    // stretched across the whole screen.
     const map=L.map(containerRef.current,{zoomControl:true});
     mapRef.current=map;
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'© OpenStreetMap © CARTO',maxZoom:20,subdomains:'abcd'}).addTo(map);
@@ -4397,7 +4813,7 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
     L.marker([centerLat,centerLng],{icon:L.divIcon({className:'',html:'<div style="width:14px;height:14px;border-radius:50%;background:#fff;border:3px solid #1e293b"></div>',iconSize:[14,14],iconAnchor:[7,7]})}).addTo(map).bindPopup(businessName||'Business location');
 
     return()=>{if(mapRef.current){mapRef.current.remove();mapRef.current=null}};
-  },[points,centerLat,centerLng,gridSize]);
+  },[points,centerLat,centerLng,gridSize,isFullscreen]);
 
   return(
     <div ref={wrapperRef} className={`overflow-hidden border ${isFullscreen?'flex flex-col h-full w-full':'rounded-xl'}`} style={{background:'#1e293b'}}>
@@ -7691,6 +8107,9 @@ function AnalyticsTab({client,setData,data}){
 
       {/* Google Search Console */}
       <GSCSection client={client} setData={setData} data={data} key={'gsc-'+client.id}/>
+
+      {/* Google Analytics */}
+      <GA4Section client={client} setData={setData} data={data} key={'ga4-'+client.id}/>
 
       {/* Submit for Indexing */}
       <IndexingSection client={client} key={'indexing-'+client.id}/>
