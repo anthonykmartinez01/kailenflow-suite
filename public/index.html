@@ -4846,7 +4846,7 @@ function buildCompetitorGrid(ownGrid,competitor){
   return (ownGrid||[]).map(p=>({...p,rank:p.taskId in rankByTask?rankByTask[p.taskId]:null}));
 }
 
-function CompetitorsPanel({competitors,clientCid,selectedCid,onSelect}){
+function CompetitorsPanel({competitors,clientCid,selectedCid,onSelect,onCompare}){
   if(!competitors||competitors.length===0){
     return(
       <div className="stitch-glass-card rounded-[20px] p-5 text-center">
@@ -4866,6 +4866,7 @@ function CompetitorsPanel({competitors,clientCid,selectedCid,onSelect}){
           const isTarget=clientCid&&c.cid===clientCid;
           const hasMap=!!c.grid;
           const canViewMap=hasMap&&!isTarget&&onSelect;
+          const canCompare=hasMap&&!isTarget&&onCompare;
           const isSelected=selectedCid===c.cid;
           return(
             <div key={c.cid} onClick={()=>canViewMap&&onSelect(isSelected?null:c.cid)}
@@ -4881,12 +4882,95 @@ function CompetitorsPanel({competitors,clientCid,selectedCid,onSelect}){
                 <div><p className="text-xs font-bold text-brand-dark">{c.visibilityPct}%</p><p className="text-[9px] text-muted-stone uppercase tracking-wide">Vis</p></div>
                 <div><p className="text-xs font-bold text-brand-dark">{c.avgRank}</p><p className="text-[9px] text-muted-stone uppercase tracking-wide">Rank</p></div>
                 {!isTarget&&(
+                  <button onClick={e=>{e.stopPropagation();canCompare&&onCompare(c.cid)}} disabled={!canCompare} className="material-symbols-outlined text-[16px] disabled:cursor-default" style={{color:canCompare?undefined:'rgba(0,0,0,0.15)'}} title={canCompare?'Compare side-by-side':'Not available for this scan — re-run it to enable'}>compare_arrows</button>
+                )}
+                {!isTarget&&(
                   <span className={`material-symbols-outlined text-[16px] ${canViewMap?'text-muted-stone':'text-black/15'}`} title={canViewMap?'View their map':'Map not available for this scan — re-run it to enable'}>{isSelected?'visibility':'map'}</span>
                 )}
               </div>
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+// Side-by-side "Competitor Match-up" view — your grid on the left, theirs on
+// the right, same geometry, plus whatever profile fields DataForSEO's
+// local_finder actually returns (rating/reviews/phone/website/address).
+// Deliberately does NOT show photo/post counts like some reference tools do —
+// those come from the Google Business Profile API, which this app only has
+// access to for the client's OWN listing (via their connected GBP account),
+// never a competitor's, so faking those numbers would just be wrong data.
+function CompetitorMatchupModal({open,onClose,snapshot,client,competitor}){
+  if(!open||!competitor)return null;
+  const targetEntry=(snapshot.competitors||[]).find(c=>c.cid===(snapshot.mapsCid||client.mapsCid));
+  const competitorGrid=buildCompetitorGrid(snapshot.grid,competitor);
+  const Detail=({label,c,isTarget})=>(
+    <div className="bg-black/[0.03] rounded-xl p-3 text-xs space-y-1.5">
+      <p className="font-bold text-brand-dark text-sm mb-1">{label}</p>
+      <p><span className="text-muted-stone">Category:</span> {c?.category||'—'}</p>
+      <p><span className="text-muted-stone">Address:</span> {isTarget?(client.address||'—'):(c?.address||'—')}</p>
+      <p><span className="text-muted-stone">Phone:</span> {isTarget?(client.phone||'—'):(c?.phone||'—')}</p>
+      <p><span className="text-muted-stone">Website:</span> {isTarget?(client.website||'—'):(c?.website||'—')}</p>
+      <p><span className="text-muted-stone">Rating:</span> {c?.rating?`${c.rating}★ (${c.votes||0} reviews)`:'—'}</p>
+    </div>
+  );
+  return(
+    <div className="font-manrope fixed inset-0 z-50 flex items-start justify-center p-2 sm:p-4 overflow-y-auto" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/50 backdrop-blur-sm"/>
+      <div className="relative stitch-glass-card !bg-white/95 rounded-[24px] shadow-2xl w-full max-w-6xl my-4 sm:my-8 fade-in" onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between p-5 border-b border-glass-border sticky top-0 bg-white/95 backdrop-blur-xl rounded-t-[24px] z-10">
+          <h3 className="text-lg font-bold text-brand-dark">Competitor Match-up</h3>
+          <button onClick={onClose} className="touch-target flex items-center justify-center w-8 h-8 rounded-full hover:bg-black/5 text-muted-stone"><span className="material-symbols-outlined">close</span></button>
+        </div>
+        <div className="p-5 space-y-5">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div><p className="font-bold text-brand-dark text-sm">{snapshot.businessName}</p><p className="text-[11px] text-muted-stone">{targetEntry?.category||''}</p></div>
+                <span className="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-brand/15 text-brand-dark">Target</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                <div className="bg-black/[0.03] rounded-lg p-2 text-center"><p className="text-lg font-bold text-brand-dark">{targetEntry?.visibilityPct??snapshot.solv}%</p><p className="text-[10px] text-muted-stone uppercase">Visibility</p></div>
+                <div className="bg-black/[0.03] rounded-lg p-2 text-center"><p className="text-lg font-bold text-brand-dark">{targetEntry?.avgRank??snapshot.avgRank}</p><p className="text-[10px] text-muted-stone uppercase">Avg Rank</p></div>
+              </div>
+              <LeafletHeatMap points={snapshot.grid} centerLat={snapshot.centerLat} centerLng={snapshot.centerLng} businessName={snapshot.businessName} address={client.address} keyword={snapshot.keyword} gridSize={snapshot.gridSize} radiusMiles={snapshot.radiusMiles} mapHeight={300}/>
+            </div>
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div><p className="font-bold text-brand-dark text-sm">{competitor.title}</p><p className="text-[11px] text-muted-stone">{competitor.category||''}</p></div>
+                <span className="text-[10px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full bg-black/10 text-deep-obsidian/70">Competitor</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                <div className="bg-black/[0.03] rounded-lg p-2 text-center"><p className="text-lg font-bold text-brand-dark">{competitor.visibilityPct}%</p><p className="text-[10px] text-muted-stone uppercase">Visibility</p></div>
+                <div className="bg-black/[0.03] rounded-lg p-2 text-center"><p className="text-lg font-bold text-brand-dark">{competitor.avgRank}</p><p className="text-[10px] text-muted-stone uppercase">Avg Rank</p></div>
+              </div>
+              <LeafletHeatMap points={competitorGrid} centerLat={snapshot.centerLat} centerLng={snapshot.centerLng} businessName={competitor.title} keyword={snapshot.keyword} gridSize={snapshot.gridSize} radiusMiles={snapshot.radiusMiles} mapHeight={300}/>
+            </div>
+          </div>
+
+          <div>
+            <h4 className="text-[11px] font-semibold text-muted-stone uppercase tracking-widest mb-2">Profile Comparison</h4>
+            <div className="stitch-glass-card rounded-[16px] overflow-hidden">
+              <table className="w-full text-sm">
+                <thead><tr className="text-[10px] text-muted-stone uppercase tracking-wide"><th className="text-left font-medium px-3 py-2">Metric</th><th className="text-right font-medium px-3 py-2">Target</th><th className="text-right font-medium px-3 py-2">Competitor</th></tr></thead>
+                <tbody>
+                  <tr className="border-t border-glass-border"><td className="px-3 py-2 text-muted-stone">Visibility</td><td className="px-3 py-2 text-right font-bold text-brand-dark">{targetEntry?.visibilityPct??snapshot.solv}%</td><td className="px-3 py-2 text-right font-bold text-brand-dark">{competitor.visibilityPct}%</td></tr>
+                  <tr className="border-t border-glass-border"><td className="px-3 py-2 text-muted-stone">Avg Rank</td><td className="px-3 py-2 text-right font-bold text-brand-dark">{targetEntry?.avgRank??snapshot.avgRank}</td><td className="px-3 py-2 text-right font-bold text-brand-dark">{competitor.avgRank}</td></tr>
+                  <tr className="border-t border-glass-border"><td className="px-3 py-2 text-muted-stone">Rating</td><td className="px-3 py-2 text-right font-bold text-brand-dark">{targetEntry?.rating?`${targetEntry.rating}★`:'—'}</td><td className="px-3 py-2 text-right font-bold text-brand-dark">{competitor.rating?`${competitor.rating}★`:'—'}</td></tr>
+                  <tr className="border-t border-glass-border"><td className="px-3 py-2 text-muted-stone">Reviews</td><td className="px-3 py-2 text-right font-bold text-brand-dark">{targetEntry?.votes??'—'}</td><td className="px-3 py-2 text-right font-bold text-brand-dark">{competitor.votes??'—'}</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Detail label={snapshot.businessName} c={targetEntry} isTarget/>
+            <Detail label={competitor.title} c={competitor}/>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -4899,8 +4983,10 @@ function CompetitorsPanel({competitors,clientCid,selectedCid,onSelect}){
 // grid points (buildCompetitorGrid above) — no new DataForSEO calls.
 function RankMapDetail({snapshot,client}){
   const [selectedCid,setSelectedCid]=useState(null);
+  const [compareCid,setCompareCid]=useState(null);
   const competitors=snapshot.competitors||[];
   const selectedCompetitor=selectedCid?competitors.find(c=>c.cid===selectedCid):null;
+  const compareCompetitor=compareCid?competitors.find(c=>c.cid===compareCid):null;
   const displayGrid=selectedCompetitor?buildCompetitorGrid(snapshot.grid,selectedCompetitor):snapshot.grid;
   const displayName=selectedCompetitor?selectedCompetitor.title:snapshot.businessName;
   return(
@@ -4914,7 +5000,8 @@ function RankMapDetail({snapshot,client}){
         )}
         <LeafletHeatMap points={displayGrid} centerLat={snapshot.centerLat} centerLng={snapshot.centerLng} businessName={displayName} address={selectedCompetitor?undefined:client.address} keyword={snapshot.keyword} gridSize={snapshot.gridSize} radiusMiles={snapshot.radiusMiles}/>
       </div>
-      <CompetitorsPanel competitors={competitors} clientCid={snapshot.mapsCid||client.mapsCid} selectedCid={selectedCid} onSelect={setSelectedCid}/>
+      <CompetitorsPanel competitors={competitors} clientCid={snapshot.mapsCid||client.mapsCid} selectedCid={selectedCid} onSelect={setSelectedCid} onCompare={setCompareCid}/>
+      <CompetitorMatchupModal open={!!compareCompetitor} onClose={()=>setCompareCid(null)} snapshot={snapshot} client={client} competitor={compareCompetitor}/>
     </div>
   );
 }

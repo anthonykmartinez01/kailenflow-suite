@@ -123,6 +123,7 @@ export interface CidCandidate { cid: string; title: string; phone?: string; doma
 
 export interface CompetitorStat {
   cid: string; title: string; category?: string; rating?: number; votes?: number;
+  phone?: string; website?: string; address?: string;
   points: number; visibilityPct: number; avgRank: number;
   // Per-point ranks {taskId,rank}, keyed the same way the client's own grid
   // is (join on taskId) — lets the UI render this competitor's own heat map
@@ -246,7 +247,7 @@ export async function pollHeatmapTasks(opts: {
   // "Visibility" is defined the same way it is everywhere else in this
   // app (top-3 presence %, i.e. Share of Local Voice) for consistency,
   // not whatever a different tool might mean by the word.
-  const compAgg = new Map<string, { title: string; category?: string; rating?: number; votes?: number; count: number; top3Count: number; rankSum: number; gridPoints: Map<string, number> }>();
+  const compAgg = new Map<string, { title: string; category?: string; rating?: number; votes?: number; phone?: string; website?: string; address?: string; count: number; top3Count: number; rankSum: number; gridPoints: Map<string, number> }>();
   const totalPoints = ready.length;
   for (const f of ready) {
     for (const it of f.items) {
@@ -261,6 +262,7 @@ export async function pollHeatmapTasks(opts: {
       } else {
         compAgg.set(it.cid, {
           title: it.title, category: it.category, rating: it.rating?.value, votes: it.rating?.votes_count,
+          phone: it.phone, website: it.domain || it.url, address: it.address,
           count: 1, rankSum: rank, top3Count: rank <= 3 ? 1 : 0,
           gridPoints: new Map([[f.taskId, rank]]),
         });
@@ -272,6 +274,7 @@ export async function pollHeatmapTasks(opts: {
     ? [...compAgg.entries()]
         .map(([compCid, v]) => ({
           cid: compCid, title: v.title, category: v.category, rating: v.rating, votes: v.votes,
+          phone: v.phone, website: v.website, address: v.address,
           points: v.count,
           visibilityPct: Math.round((v.top3Count / totalPoints) * 1000) / 10,
           avgRank: Math.round((v.rankSum / v.count) * 10) / 10,
