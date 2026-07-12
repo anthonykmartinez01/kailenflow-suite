@@ -73,6 +73,10 @@ tailwind.config = {
 .stitch-hover-lift{transition:transform .3s cubic-bezier(0.34,1.56,0.64,1)}
 .stitch-hover-lift:hover{transform:translateY(-4px)}
 .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24}
+/* Required by OpenStreetMap/CARTO's free tile usage terms — kept, just
+   shrunk down so it's far less visually intrusive on the heat maps. */
+.leaflet-control-attribution{font-size:9px;line-height:1.2;padding:0 4px;opacity:0.55;background:rgba(30,41,59,0.55)!important;color:#cbd5e1!important}
+.leaflet-control-attribution a{color:#cbd5e1!important}
 </style>
 </head>
 <body class="bg-brand-warm">
