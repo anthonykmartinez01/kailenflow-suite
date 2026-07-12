@@ -4781,7 +4781,14 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
       // after a resize (confirmed: the animated version gets stuck at the
       // pre-resize center/zoom, while the same call with animate:false
       // lands on the exact correct one every time).
-      if(boundsPoints.length>1){map.fitBounds(bounds.pad(0.18),{maxZoom:17,animate:false})}else{map.setView([boundsPoints[0]?.lat??centerLat,boundsPoints[0]?.lng??centerLng],15,{animate:false})}
+      // Fixed PIXEL padding, not bounds.pad(0.18) (a % of the bounds' OWN
+      // size) — that's what was cutting off green dots: a tight cluster of
+      // 2-3 close-together points has a tiny bounding box, so 18% of it is
+      // only a few pixels, nowhere near enough room for a ~46px dot plus its
+      // glow. A fixed pixel margin can never shrink below what a dot
+      // actually needs, no matter how tight the cluster is — so this can't
+      // recur on any account/any grid size.
+      if(boundsPoints.length>1){map.fitBounds(bounds,{maxZoom:17,animate:false,padding:[70,70]})}else{map.setView([boundsPoints[0]?.lat??centerLat,boundsPoints[0]?.lng??centerLng],15,{animate:false})}
     };
     refit();
     // Leaflet reads the container's size at construction time — if this
