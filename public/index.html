@@ -4864,7 +4864,8 @@ function CompetitorsPanel({competitors,clientCid,selectedCid,onSelect}){
       <div className="space-y-0.5 max-h-[420px] overflow-y-auto">
         {competitors.map((c,i)=>{
           const isTarget=clientCid&&c.cid===clientCid;
-          const canViewMap=!!c.grid&&!isTarget&&onSelect;
+          const hasMap=!!c.grid;
+          const canViewMap=hasMap&&!isTarget&&onSelect;
           const isSelected=selectedCid===c.cid;
           return(
             <div key={c.cid} onClick={()=>canViewMap&&onSelect(isSelected?null:c.cid)}
@@ -4879,7 +4880,9 @@ function CompetitorsPanel({competitors,clientCid,selectedCid,onSelect}){
               <div className="flex items-center gap-3 flex-shrink-0 text-right">
                 <div><p className="text-xs font-bold text-brand-dark">{c.visibilityPct}%</p><p className="text-[9px] text-muted-stone uppercase tracking-wide">Vis</p></div>
                 <div><p className="text-xs font-bold text-brand-dark">{c.avgRank}</p><p className="text-[9px] text-muted-stone uppercase tracking-wide">Rank</p></div>
-                {canViewMap&&<span className="material-symbols-outlined text-[16px] text-muted-stone" title="View their map">{isSelected?'visibility':'map'}</span>}
+                {!isTarget&&(
+                  <span className={`material-symbols-outlined text-[16px] ${canViewMap?'text-muted-stone':'text-black/15'}`} title={canViewMap?'View their map':'Map not available for this scan — re-run it to enable'}>{isSelected?'visibility':'map'}</span>
+                )}
               </div>
             </div>
           );
