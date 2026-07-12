@@ -4903,8 +4903,11 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
     // is the whole fix — screen blending doesn't depend on backdrop
     // luminosity to inject color, so it reliably lifts near-black pixels to
     // a visible teal regardless of how dark the source tile is.
+    // Pushed noticeably more saturated/opaque than the first attempt at
+    // this (rgba(45,120,120,0.6)) — that read as barely-there on top of
+    // near-black tiles instead of a clear, unmistakable teal shift.
     const lightenOverlay=document.createElement('div');
-    lightenOverlay.style.cssText='position:absolute;inset:0;background:rgba(45,120,120,0.6);mix-blend-mode:screen;pointer-events:none;z-index:250;';
+    lightenOverlay.style.cssText='position:absolute;inset:0;background:rgba(10,170,150,0.75);mix-blend-mode:screen;pointer-events:none;z-index:250;';
     containerRef.current.appendChild(lightenOverlay);
 
     // Fit to the grid's real extent instead of a fixed zoom level — a tight
