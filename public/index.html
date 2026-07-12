@@ -4886,13 +4886,24 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
     mapRef.current=map;
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'© OpenStreetMap © CARTO',maxZoom:20,subdomains:'abcd'}).addTo(map);
 
-    // A multiplicative brightness() filter barely moves near-black pixels
-    // (dark_all's base tiles sit around rgb(10,14,20) in most areas — even
-    // at 1.55x that's still practically black), which is why the earlier
-    // filter-based attempt looked unchanged. An additive "screen" blend
-    // overlay lifts dark pixels reliably regardless of how dark they start.
+    // No API key for the exact tile provider a reference screenshot used
+    // (looks like a custom Mapbox dark style, not free CARTO tiles) — can't
+    // be a literal pixel match. Closest approximation: recolor the CARTO
+    // dark_all tiles (which are blue-black) to the reference's teal-navy
+    // palette in two passes. Pass 1 (mix-blend-mode:'color') replaces the
+    // hue/saturation of every pixel with a solid teal while keeping each
+    // pixel's ORIGINAL luminosity — so water stays darkest, land midtone,
+    // road casings lightest, exactly the structure already baked into the
+    // source tiles, just re-hued instead of blue-black. Pass 2 is the same
+    // brightness lift as before (a multiplicative filter barely moves
+    // near-black pixels, which is why this is additive/screen instead),
+    // now tinted teal instead of blue to land on the reference's lighter
+    // overall tone.
+    const colorizeOverlay=document.createElement('div');
+    colorizeOverlay.style.cssText='position:absolute;inset:0;background:#1a4a52;mix-blend-mode:color;pointer-events:none;z-index:249;';
+    containerRef.current.appendChild(colorizeOverlay);
     const lightenOverlay=document.createElement('div');
-    lightenOverlay.style.cssText='position:absolute;inset:0;background:rgba(71,93,133,0.55);mix-blend-mode:screen;pointer-events:none;z-index:250;';
+    lightenOverlay.style.cssText='position:absolute;inset:0;background:rgba(70,120,125,0.55);mix-blend-mode:screen;pointer-events:none;z-index:250;';
     containerRef.current.appendChild(lightenOverlay);
 
     // Fit to the grid's real extent instead of a fixed zoom level — a tight
