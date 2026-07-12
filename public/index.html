@@ -914,9 +914,32 @@ function ClientDashboard({client,data,setData,setTab}){
   const prevAvgSolv=prevSolvValues.length?prevSolvValues.reduce((a,b)=>a+b,0)/prevSolvValues.length:null;
   const solvChangePct=(avgSolv!=null&&prevAvgSolv!=null&&prevAvgSolv>0)?((avgSolv-prevAvgSolv)/prevAvgSolv*100):null;
 
-  const genPages=c.generatedPages||[];
-  const locationPagesGenerated=genPages.filter(p=>p.type==='location').length;
-  const locationPagesTotal=(c.architecture&&c.architecture.locationPages)?c.architecture.locationPages.length:0;
+  // Website card's "Scheduled Pages" / "Generated Pages" tiles read live
+  // from the client's actual GitHub repo (client.publishing.repo, already
+  // set in Settings for the indexing-automation feature) via the same
+  // /api/scheduled-pages-status endpoint IndexingDashboard uses cross-
+  // client — reads and parses schedule.ts straight from the repo, no
+  // separate manual tracking to keep in sync.
+  const [ghSchedule,setGhSchedule]=useState(null); // null=loading/no repo, else {pages,error}
+  const ghFetchedForRef=useRef(null);
+  useEffect(()=>{
+    if(!c.publishing?.repo){setGhSchedule(null);ghFetchedForRef.current=null;return}
+    const key=c.id+':'+c.publishing.repo;
+    if(ghFetchedForRef.current===key)return;
+    ghFetchedForRef.current=key;
+    setGhSchedule(null);
+    (async()=>{
+      try{
+        const r=await fetch('/api/scheduled-pages-status',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({repos:[{name:c.name,repo:c.publishing.repo,branch:c.publishing.branch||'main'}]})});
+        const j=await r.json();
+        const result=j.results?.[0];
+        if(!r.ok||j.error||result?.error)setGhSchedule({pages:[],error:result?.error||j.error||'Failed to load'});
+        else setGhSchedule({pages:result?.pages||[],error:null});
+      }catch(e){setGhSchedule({pages:[],error:'Network error'})}
+    })();
+  },[c.id,c.publishing?.repo,c.publishing?.branch]); // eslint-disable-line
+  const ghTotalPages=ghSchedule?.pages?.length??null;
+  const ghScheduledPages=ghSchedule?.pages?.filter(p=>{const t=new Date(p.date+'T00:00:00Z').getTime();return Number.isFinite(t)&&t>Date.now()}).length??null;
   const lastCrawl=(c.contentGap||{}).lastCrawl;
   const pageSpeedScore=c.pageSpeed?.mobile?.score;
 
@@ -1099,12 +1122,31 @@ function ClientDashboard({client,data,setData,setTab}){
               <p className="text-sm font-medium text-deep-obsidian/80">{lastCrawl?fmt(lastCrawl):'Not crawled yet'}</p>
             </div>
             <div className="bg-black/[0.03] rounded-xl p-4">
-              <p className="text-xs text-muted-stone mb-1">Generated Pages</p>
-              <p className="text-xl font-bold text-brand-dark">{genPages.length}</p>
+              <p className="text-xs text-muted-stone mb-1">Scheduled Pages</p>
+              {!c.publishing?.repo?(
+                <>
+                  <p className="text-xl font-bold text-muted-stone">—</p>
+                  {setTab&&<button onClick={()=>setTab('settings')} className="text-[11px] text-brand hover:underline">Connect GitHub</button>}
+                </>
+              ):ghSchedule?.error?(
+                <p className="text-xs text-red-500" title={ghSchedule.error}>Error loading</p>
+              ):ghTotalPages==null?(
+                <p className="text-xl font-bold text-muted-stone">…</p>
+              ):(
+                <p className="text-xl font-bold text-brand-dark">{ghScheduledPages}</p>
+              )}
             </div>
             <div className="bg-black/[0.03] rounded-xl p-4">
-              <p className="text-xs text-muted-stone mb-1">Location Pages</p>
-              <p className="text-xl font-bold text-brand-dark">{locationPagesTotal?`${locationPagesGenerated}/${locationPagesTotal}`:locationPagesGenerated}</p>
+              <p className="text-xs text-muted-stone mb-1">Generated Pages</p>
+              {!c.publishing?.repo?(
+                <p className="text-xl font-bold text-muted-stone">—</p>
+              ):ghSchedule?.error?(
+                <p className="text-xs text-red-500" title={ghSchedule.error}>Error loading</p>
+              ):ghTotalPages==null?(
+                <p className="text-xl font-bold text-muted-stone">…</p>
+              ):(
+                <p className="text-xl font-bold text-brand-dark">{ghTotalPages}</p>
+              )}
             </div>
           </div>
         </div>
