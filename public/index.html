@@ -4555,7 +4555,7 @@ function LiveHeatMapGenerator({client,setData}){
 
           {!client.mapsCid&&client.mapsCidCandidates?.length>0&&(
             <div className="bg-yellow-50 text-yellow-800 rounded-xl p-3 text-xs space-y-2">
-              <p className="font-medium">Couldn't confirm which business this is automatically — several results have a similar name and none matched your phone/website on file. Pick the correct one:</p>
+              <p className="font-medium">Couldn't confirm which business this is automatically — either none matched your phone/website on file, or none closely matched the name on file. Pick the correct one from what showed up most often in these searches:</p>
               {client.mapsCidCandidates.map(c=>(
                 <div key={c.cid} className="flex items-center justify-between flex-wrap gap-2 bg-white rounded-xl p-2 border border-yellow-200">
                   <div>
@@ -4662,6 +4662,9 @@ function LiveHeatMapGenerator({client,setData}){
                   <div className="flex items-center gap-2">
                     <span className="text-xs px-2 py-1 rounded-full bg-green-100 text-green-700 font-medium">SoLV {m.solv}% · Avg {m.avgRank||'—'} · {m.top3}/{m.totalPoints} in pack</span>
                     {m.incomplete&&<span className="text-[11px] text-muted-stone" title="A few grid points never returned results from the provider and were counted as not-ranking.">⚠ partial</span>}
+                    {!client.mapsCid&&m.top21plus===m.totalPoints&&(
+                      <button onClick={()=>checkStatus(m)} className="text-xs text-amber-600 hover:underline" title="Every point came back unmatched — re-checks the already-submitted results for free (no new searches) using improved matching.">Re-check match</button>
+                    )}
                     <button onClick={()=>setExpanded(expanded===m.id?null:m.id)} className="text-xs text-brand hover:underline">{expanded===m.id?'Hide map':'View map'}</button>
                     <button onClick={()=>deleteLiveMap(m.id)} className="text-muted-stone hover:text-red-500" title="Delete"><span className="material-symbols-outlined text-[18px]">delete</span></button>
                   </div>

@@ -174,6 +174,32 @@ export async function pollHeatmapTasks(opts: {
         cid: item.cid, title: item.title, phone: item.phone, domain: item.domain,
         rating: item.rating?.value, votes: item.rating?.votes_count,
       }));
+    } else {
+      // fuzzyMatch never hit ONCE across the entire grid — real businesses
+      // do get skipped this way when the name on file differs enough from
+      // what Google actually displays (reordered words, a dropped "LLC",
+      // a rebrand, etc). Silently leaving the map all "not found" with zero
+      // explanation is worse than a wrong guess, so fall back to surfacing
+      // whichever businesses showed up most often across all points —
+      // gives a human something to manually confirm instead of nothing.
+      const freq = new Map<string, { item: any; count: number }>();
+      for (const f of ready) {
+        for (const it of f.items) {
+          if (!it.cid) continue;
+          const existing = freq.get(it.cid);
+          if (existing) existing.count++;
+          else freq.set(it.cid, { item: it, count: 1 });
+        }
+      }
+      if (freq.size > 0) {
+        unconfirmedCandidates = [...freq.values()]
+          .sort((a, b) => b.count - a.count)
+          .slice(0, 6)
+          .map(({ item }) => ({
+            cid: item.cid, title: item.title, phone: item.phone, domain: item.domain,
+            rating: item.rating?.value, votes: item.rating?.votes_count,
+          }));
+      }
     }
   }
 
