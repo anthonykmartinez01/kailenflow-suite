@@ -37,33 +37,82 @@ export default async (req: Request, _ctx: Context) => {
   if (!token) return json({ error: "No GHL Private Integration token set for this client, and no fallback GHL_API_TOKEN configured on the server." }, 500);
 
   const days = Number(body.days) || 28;
+  // Months param drives the Reports tab's monthly bar chart (default: this
+  // month + the 3 before it, matching the reference card's 4-month view).
+  // Kept separate from `days` (still used by the Dashboard's rolling-28-day
+  // card) rather than replacing it, so that card's meaning doesn't change.
+  const months = Math.max(1, Math.min(12, Number(body.months) || 4));
   const end = new Date();
   const start = new Date();
   start.setDate(start.getDate() - days);
+  const monthsStart = new Date(end.getFullYear(), end.getMonth() - (months - 1), 1);
 
   const headers = { Authorization: `Bearer ${token}`, Version: GHL_VERSION, Accept: "application/json" };
 
-  try {
-    // Forms API — every submission across every form on this location,
-    // scoped to the trailing window. Paginate in case a client has more
-    // than one page's worth of leads in the window.
-    let total = 0;
+  // Pulls every submission (not just a count) in [from, to] so callers can
+  // bucket by day/month — paginated in case a client has more than one
+  // page's worth in the window.
+  async function fetchSubmissions(from: Date, to: Date): Promise<any[]> {
+    const out: any[] = [];
     let page = 1;
     const limit = 100;
     for (let i = 0; i < 20; i++) { // hard cap so a runaway response can't loop forever
-      const url = `${GHL_BASE}/forms/submissions?locationId=${encodeURIComponent(locationId)}&startAt=${start.toISOString()}&endAt=${end.toISOString()}&limit=${limit}&page=${page}`;
+      const url = `${GHL_BASE}/forms/submissions?locationId=${encodeURIComponent(locationId)}&startAt=${from.toISOString()}&endAt=${to.toISOString()}&limit=${limit}&page=${page}`;
       const res = await fetch(url, { headers });
       if (!res.ok) {
         const t = await res.text();
-        return json({ error: `GHL forms request failed (${res.status}). Check the API token's scopes, or that this Location ID is correct.`, detail: t.slice(0, 200) }, 502);
+        throw new Error(`GHL forms request failed (${res.status}): ${t.slice(0, 200)}`);
       }
       const data = await res.json();
       const submissions: any[] = data.submissions || [];
-      total += submissions.length;
+      out.push(...submissions);
       if (submissions.length < limit) break; // last page
       page++;
     }
-    return json({ totalLeads: total, windowDays: days });
+    return out;
+  }
+
+  try {
+    const [windowSubmissions, monthlySubmissions] = await Promise.all([
+      fetchSubmissions(start, end),
+      // Only re-fetch the wider range if it doesn't already fall inside the
+      // rolling window we just pulled — avoids a redundant second call for
+      // the common case (days >= the requested months' span).
+      monthsStart < start ? fetchSubmissions(monthsStart, end) : Promise.resolve<any[]>([]),
+    ]);
+    const allForMonthly = monthsStart < start ? monthlySubmissions : windowSubmissions;
+
+    // Bucket into YYYY-MM counts across the requested month range. GHL's own
+    // field name for a submission's timestamp isn't documented consistently
+    // across API versions, so this checks the common variants defensively.
+    const monthKeys: string[] = [];
+    for (let i = months - 1; i >= 0; i--) {
+      const d = new Date(end.getFullYear(), end.getMonth() - i, 1);
+      monthKeys.push(d.toISOString().slice(0, 7));
+    }
+    const counts: Record<string, number> = {};
+    for (const k of monthKeys) counts[k] = 0;
+    for (const s of allForMonthly) {
+      const raw = s.createdAt || s.dateAdded || s.created_at || s.dateCreated;
+      if (!raw) continue;
+      const key = new Date(raw).toISOString().slice(0, 7);
+      if (key in counts) counts[key]++;
+    }
+    const monthly = monthKeys.map((month) => ({ month, count: counts[month] }));
+    const currentMonthCount = monthly[monthly.length - 1]?.count ?? 0;
+    const previousMonthCount = monthly[monthly.length - 2]?.count ?? 0;
+    const changePct = previousMonthCount > 0
+      ? Math.round(((currentMonthCount - previousMonthCount) / previousMonthCount) * 100)
+      : (currentMonthCount > 0 ? 100 : 0);
+
+    return json({
+      totalLeads: windowSubmissions.length,
+      windowDays: days,
+      monthly,
+      currentMonthCount,
+      previousMonthCount,
+      changePct,
+    });
   } catch (e: any) {
     return json({ error: "Couldn't reach GoHighLevel.", detail: String(e?.message || e) }, 502);
   }

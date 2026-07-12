@@ -1736,6 +1736,138 @@ function SettingsTab({client,setData}){
 }
 
 // ─── Reports Tab ───
+// Small CSS-only monthly bar chart — same "no charting library, height as a
+// fraction of the max" approach as the existing DailyChart (GSC clicks),
+// just monthly buckets with the value labeled above each bar (matching the
+// reference GBP-style card) instead of a hover tooltip.
+function MonthlyBarChart({data,valueKey,color}){
+  if(!data||data.length===0)return null;
+  const max=Math.max(...data.map(d=>d[valueKey]),1);
+  return(
+    <div className="flex items-end justify-between gap-2" style={{height:110}}>
+      {data.map((d,i)=>{
+        const v=d[valueKey]||0;
+        const h=Math.max((v/max)*72,v>0?6:2);
+        const isCurrent=i===data.length-1;
+        const monthLabel=new Date(d.month+'-02T00:00:00').toLocaleDateString('en-US',{month:'short'});
+        return(
+          <div key={d.month} className="flex-1 flex flex-col items-center gap-1 min-w-0">
+            <span className="text-xs font-semibold text-deep-obsidian/70">{v}</span>
+            <div className="w-full rounded-t-md transition-all duration-500" style={{height:h,background:isCurrent?color:`${color}40`}}/>
+            <span className="text-[11px] text-muted-stone">{monthLabel}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Reusable client-facing metric card matching the reference design: icon +
+// title header, a "Total"/"New this period" stat pair with trend, and a
+// monthly bar chart below. When `connected` is false (no data source wired
+// up yet for that metric — see PerformanceMetricsSection), shows an honest
+// "not connected" state instead of fabricated numbers.
+function ReportStatCard({icon,title,connected,placeholderText,totalLabel,totalValue,totalBadge,periodLabel,periodValue,changePct,changeVsLabel,chartData,chartKey,loading}){
+  return(
+    <div className="stitch-glass-card rounded-[24px] p-6">
+      <div className="flex items-center gap-2 mb-4">
+        <span className="material-symbols-outlined text-brand text-[22px]">{icon}</span>
+        <h4 className="font-bold text-brand-dark text-base">{title}</h4>
+      </div>
+      {!connected?(
+        <div className="text-center py-8">
+          <span className="material-symbols-outlined text-3xl text-muted-stone/40 mb-2 block">link_off</span>
+          <p className="text-sm text-muted-stone">{placeholderText}</p>
+        </div>
+      ):loading?(
+        <div className="text-center py-8"><div className="inline-block w-6 h-6 border-4 border-brand border-t-transparent rounded-full animate-spin"/></div>
+      ):(
+        <>
+          <div className="grid grid-cols-2 gap-4 pb-4 mb-4 border-b border-glass-border">
+            <div>
+              <p className="text-xs text-muted-stone mb-1">{totalLabel}</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-3xl font-bold text-deep-obsidian">{totalValue}</span>
+                {totalBadge}
+              </div>
+            </div>
+            <div>
+              <p className="text-xs text-muted-stone mb-1">{periodLabel}</p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-3xl font-bold text-brand">{periodValue}</span>
+                {changePct!=null&&changePct!==0&&(
+                  <span className={`text-xs font-bold flex items-center gap-0.5 ${changePct>0?'text-green-600':'text-red-600'}`}>
+                    <span className="material-symbols-outlined text-[14px]">{changePct>0?'arrow_upward':'arrow_downward'}</span>{Math.abs(changePct)}%
+                  </span>
+                )}
+              </div>
+              {changeVsLabel&&<p className="text-[10px] text-muted-stone mt-0.5">{changeVsLabel}</p>}
+            </div>
+          </div>
+          <MonthlyBarChart data={chartData} valueKey={chartKey} color="#C45A30"/>
+        </>
+      )}
+    </div>
+  );
+}
+
+// The 4-card client-facing performance section (Reviews, Calls, Website
+// Leads, GBP Impressions) modeled on a reference rank-tracking tool's GBP
+// card design, rebuilt in the app's own Stitch branding. Website Leads is
+// the only one wired to a real data source today (GoHighLevel form
+// submissions, per-client) — Reviews/Calls/Impressions each need their own
+// Google Business Profile / call-tracking integration that doesn't exist
+// yet, so they show an honest "not connected" state rather than fake data.
+function PerformanceMetricsSection({client}){
+  const [leadsState,setLeadsState]=useState('idle'); // idle|loading|loaded|error
+  const [leadsData,setLeadsData]=useState(null);
+  const fetchedForRef=useRef(null);
+  const ghlReady=!!(client.ghlLocationId&&client.ghlPrivateToken);
+
+  useEffect(()=>{
+    if(!ghlReady){setLeadsData(null);setLeadsState('idle');return}
+    if(fetchedForRef.current===client.id)return;
+    fetchedForRef.current=client.id;
+    setLeadsState('loading');
+    (async()=>{
+      try{
+        const headers=await authHeaders({'Content-Type':'application/json'});
+        const r=await fetch('/api/ghl-leads',{method:'POST',headers,body:JSON.stringify({locationId:client.ghlLocationId,token:client.ghlPrivateToken,months:4})});
+        const j=await r.json();
+        if(!r.ok||j.error){setLeadsState('error');return}
+        setLeadsData(j);setLeadsState('loaded');
+      }catch(e){setLeadsState('error')}
+    })();
+  },[client.id,client.ghlLocationId,client.ghlPrivateToken]); // eslint-disable-line
+
+  const monthVsLabel=(monthly)=>{
+    if(!monthly||monthly.length<2)return null;
+    const prevMonth=new Date(monthly[monthly.length-2].month+'-02T00:00:00').toLocaleDateString('en-US',{month:'long'});
+    return `vs ${prevMonth}`;
+  };
+
+  return(
+    <div>
+      <h3 className="text-xl font-bold text-brand-dark mb-1">Performance Metrics</h3>
+      <p className="text-sm text-muted-stone mb-4">Reviews, calls, website leads, and Google Business Profile engagement</p>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <ReportStatCard icon="chat_bubble" title="Reviews" connected={false}
+          placeholderText="Connect Google Business Profile to track reviews, ratings, and monthly review growth here."/>
+        <ReportStatCard icon="call" title="Calls" connected={false}
+          placeholderText="Connect call tracking to see call volume and trends for this client here."/>
+        <ReportStatCard icon="person_add" title="Website Leads" connected={ghlReady} loading={leadsState==='loading'&&!leadsData}
+          placeholderText={client.ghlLocationId?"No GHL Private Integration token set for this client — add one in Settings.":"Connect GoHighLevel in Settings to track website form leads here."}
+          totalLabel="Total leads" totalValue={leadsData?leadsData.monthly.reduce((a,m)=>a+m.count,0):'—'}
+          periodLabel="New this period" periodValue={leadsData?.currentMonthCount??'—'}
+          changePct={leadsData?.changePct} changeVsLabel={leadsData?monthVsLabel(leadsData.monthly):null}
+          chartData={leadsData?.monthly} chartKey="count"/>
+        <ReportStatCard icon="trending_up" title="GBP Impressions" connected={false}
+          placeholderText="Connect Google Business Profile to track how often your listing appears in Search and Maps here."/>
+      </div>
+    </div>
+  );
+}
+
 function ReportsTab({data,initialClientId}){
   const [clientId,setClientId]=useState(initialClientId||data.clients[0]?.id||'');const [month,setMonth]=useState(new Date().toISOString().slice(0,7));
   // If this component is opened from a specific client's own dashboard (initialClientId
@@ -1751,6 +1883,7 @@ function ReportsTab({data,initialClientId}){
   return(
     <div className="fade-in font-manrope">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 no-print"><h3 className="text-xl font-bold text-brand-dark">Monthly SEO Report</h3><div className="flex items-center gap-2 flex-wrap"><select value={clientId} onChange={e=>setClientId(e.target.value)} className="touch-target px-3 py-2 border border-glass-border rounded-xl text-sm focus:ring-1 focus:ring-brand focus:outline-none">{data.clients.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select><input type="month" value={month} onChange={e=>setMonth(e.target.value)} className="touch-target px-3 py-2 border border-glass-border rounded-xl text-sm focus:ring-1 focus:ring-brand focus:outline-none"/><button onClick={()=>window.print()} className="touch-target px-4 py-2 bg-brand text-white rounded-xl hover:bg-brand-hover text-sm shadow-lg shadow-brand/20">Print / PDF</button></div></div>
+      <div className="no-print mb-6"><PerformanceMetricsSection client={client}/></div>
       <div className="stitch-glass-card rounded-[24px] p-6 print:shadow-none print:p-0">
         <div className="text-center mb-6 pb-4 border-b border-glass-border"><h1 className="text-2xl font-bold text-brand">KailenFlow Suite</h1><h2 className="text-lg font-semibold text-brand-dark mt-1">Monthly SEO Report — {client.name}</h2><p className="text-sm text-muted-stone">{new Date(month+'-01T00:00:00').toLocaleDateString('en-US',{month:'long',year:'numeric'})}</p></div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6"><div className="text-center p-3 bg-brand-light rounded-xl"><p className="text-2xl font-bold text-brand">{client.scores.gbpHealth.current}%</p><p className="text-xs text-deep-obsidian/60">GBP Health</p></div><div className="text-center p-3 bg-brand-light rounded-xl"><p className="text-2xl font-bold text-brand">{client.scores.landingPage.current}%</p><p className="text-xs text-deep-obsidian/60">Landing Page</p></div><div className="text-center p-3 bg-brand-light rounded-xl"><p className="text-2xl font-bold text-brand">{client.scores.core30.current}/{client.scores.core30.total}</p><p className="text-xs text-deep-obsidian/60">Core 30</p></div><div className="text-center p-3 bg-brand-light rounded-xl"><p className="text-2xl font-bold text-brand">{tasks.length>0?Math.round(completed.length/tasks.length*100):0}%</p><p className="text-xs text-deep-obsidian/60">Implementation</p></div></div>
