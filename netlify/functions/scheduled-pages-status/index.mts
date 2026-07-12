@@ -1,5 +1,6 @@
 import type { Context, Config } from "@netlify/functions";
 import { isAuthed, unauthorized } from "../../shared/auth.mts";
+import { ghHeaders, fetchSchedule, countPageFiles, parseOwnerRepo } from "../../shared/github-schedule.mts";
 
 // Reads each client repo's schedule.ts (every path->date entry, past and
 // future) AND lists actual page files under the repo's pages directory —
@@ -18,43 +19,6 @@ function json(o: any, status = 200) {
   return new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json" } });
 }
 
-function ghHeaders(token: string) {
-  return {
-    Authorization: `Bearer ${token}`,
-    Accept: "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
-}
-
-const SCHEDULE_CANDIDATES = ["src/lib/schedule.ts", "src/lib/schedule.js"];
-
-function parseSchedule(src: string): { path: string; date: string }[] {
-  const out: { path: string; date: string }[] = [];
-  for (const line of src.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith("//") || trimmed.startsWith("*")) continue;
-    const m = trimmed.match(/^["']([^"']+)["']\s*:\s*["'](\d{4}-\d{2}-\d{2})["']/);
-    if (m) out.push({ path: m[1], date: m[2] });
-  }
-  return out;
-}
-
-// Page-producing file types across the stacks these client sites use
-// (Astro, plain HTML, occasionally Next/Vue) — matched against every blob
-// in the repo's git tree under the configured pages directory.
-const PAGE_FILE_RE = /\.(astro|md|mdx|html|tsx|jsx|vue)$/i;
-
-async function countPageFiles(owner: string, repoName: string, ref: string, pagesDir: string, headers: HeadersInit): Promise<{ count: number; error?: string }> {
-  const dir = (pagesDir || "src/pages").replace(/^\/+|\/+$/g, "");
-  const res = await fetch(`https://api.github.com/repos/${owner}/${repoName}/git/trees/${encodeURIComponent(ref)}?recursive=1`, { headers, cache: "no-store" });
-  if (!res.ok) return { count: 0, error: `GitHub ${res.status} listing ${dir}` };
-  const data = await res.json();
-  const tree: any[] = Array.isArray(data.tree) ? data.tree : [];
-  const prefix = dir + "/";
-  const count = tree.filter((t) => t.type === "blob" && typeof t.path === "string" && t.path.startsWith(prefix) && PAGE_FILE_RE.test(t.path)).length;
-  return { count };
-}
-
 export default async (req: Request, _ctx: Context) => {
   if (!(await isAuthed(req))) return unauthorized();
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
@@ -68,23 +32,13 @@ export default async (req: Request, _ctx: Context) => {
   const headers = ghHeaders(token);
 
   const results = await Promise.all(repos.map(async ({ name, repo, branch, pagesDir }) => {
-    const m = (repo || "").match(/^([^/\s]+)\/([^/\s]+)$/);
-    if (!m) return { client: name, repo, error: "invalid repo format" };
-    const [, owner, repoName] = m;
+    const parsed = parseOwnerRepo(repo);
+    if (!parsed) return { client: name, repo, error: "invalid repo format" };
+    const { owner, repoName } = parsed;
     const ref = branch || "main";
 
     const [scheduleResult, pageCountResult] = await Promise.all([
-      (async () => {
-        for (const path of SCHEDULE_CANDIDATES) {
-          const res = await fetch(`https://api.github.com/repos/${owner}/${repoName}/contents/${path}?ref=${encodeURIComponent(ref)}`, { headers, cache: "no-store" });
-          if (res.status === 404) continue;
-          if (!res.ok) return { pages: [] as { path: string; date: string }[], error: `GitHub ${res.status}` };
-          const data = await res.json();
-          const content = Buffer.from(data.content, "base64").toString("utf8");
-          return { pages: parseSchedule(content) };
-        }
-        return { pages: [] as { path: string; date: string }[] };
-      })(),
+      fetchSchedule(owner, repoName, ref, headers),
       countPageFiles(owner, repoName, ref, pagesDir || "src/pages", headers),
     ]);
 
