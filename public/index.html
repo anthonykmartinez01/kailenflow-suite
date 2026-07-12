@@ -918,8 +918,8 @@ function ClientDashboard({client,data,setData,setTab}){
       const r=await fetch('/api/fetch-hero-image',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({website:c.website})});
       const j=await r.json();
       const found=j.image||'';
-      if(found)setHeroImage(found);
-      else if(!j.image)console.warn(`[hero image] ${c.name}: ${j.reason||'no image found'}`);
+      setHeroImage(found||null); // always update — clears a stale/bad cached image if this recheck comes up empty
+      if(!found)console.warn(`[hero image] ${c.name}: ${j.reason||'no image found'}`);
       if(setData){
         setData(prev=>{const nd={...prev,clients:prev.clients.map(cl=>cl.id===c.id?{...cl,heroImage:found,heroImageCheckedAt:Date.now()}:cl)};saveData(nd);return nd});
       }
@@ -974,8 +974,8 @@ function ClientDashboard({client,data,setData,setTab}){
             </div>
             <div className="flex items-center gap-3 mt-3 flex-wrap">
               {setTab&&<button onClick={()=>setTab('settings')} className="touch-target px-4 py-2 bg-brand text-white rounded-xl text-sm font-medium hover:bg-brand-hover shadow-lg shadow-brand/20">Business Settings</button>}
-              {c.website&&!heroImage&&(
-                <button onClick={checkHeroImage} disabled={heroChecking} className="text-xs text-brand hover:underline disabled:opacity-50">{heroChecking?'Checking...':'Retry background image'}</button>
+              {c.website&&(
+                <button onClick={checkHeroImage} disabled={heroChecking} className="text-xs text-brand hover:underline disabled:opacity-50">{heroChecking?'Checking...':heroImage?'Re-check background image':'Retry background image'}</button>
               )}
             </div>
           </div>
