@@ -1403,7 +1403,6 @@ function KeywordRow({client,setData,kw,snapshots,onMove,onRemove,expanded,onTogg
           <button onClick={onToggleExpand} className="touch-target flex items-center justify-center w-8 h-8 rounded-full hover:bg-black/5 text-muted-stone"><span className={`material-symbols-outlined text-[18px] transition-transform ${expanded?'rotate-180':''}`}>expand_more</span></button>
         </div>
       </div>
-      {expanded&&<div className="px-3 pb-3"><KeywordHistoryPanel client={client} setData={setData} kw={kw} snapshots={snapshots}/></div>}
     </div>
   );
 }
@@ -1483,6 +1482,7 @@ function LocalKeywordsSection({client,setData}){
 
   const focusItems=tracked.filter(k=>k.category==='focus');
   const trackedItems=tracked.filter(k=>k.category==='tracked');
+  const expandedKw=expandedId?tracked.find(k=>k.id===expandedId):null;
 
   return(
     <div className="space-y-4">
@@ -1508,6 +1508,23 @@ function LocalKeywordsSection({client,setData}){
           <KeywordDropZone title="Tracked Keywords" items={trackedItems} client={client} setData={setData} keywordSnapshots={keywordSnapshots}
             expandedId={expandedId} setExpandedId={setExpandedId} onMove={moveCategory} onRemove={removeKeyword}
             dragHandlers={dragHandlers} {...zoneHandlers('tracked','tracked')}/>
+        </div>
+      )}
+
+      {/* Rendered full-width BELOW the two-column Focus/Tracked grid (not
+      inline inside whichever column the row lives in) — a keyword's map +
+      competitor panel needs the whole page's width to be usable; squeezed
+      into a single ~50%-width column it was too small to read. */}
+      {expandedKw&&(
+        <div className="stitch-glass-card rounded-[20px] p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h4 className="font-bold text-brand-dark">{expandedKw.keyword}</h4>
+              <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full ${expandedKw.category==='focus'?'bg-brand/15 text-brand-dark':'bg-black/5 text-muted-stone'}`}>{expandedKw.category}</span>
+            </div>
+            <button onClick={()=>setExpandedId(null)} className="touch-target flex items-center justify-center w-8 h-8 rounded-full hover:bg-black/5 text-muted-stone" title="Close"><span className="material-symbols-outlined text-[18px]">close</span></button>
+          </div>
+          <KeywordHistoryPanel client={client} setData={setData} kw={expandedKw} snapshots={keywordSnapshots(expandedKw)}/>
         </div>
       )}
 
@@ -4852,7 +4869,7 @@ function buildCompetitorGrid(ownGrid,competitor){
   return (ownGrid||[]).map(p=>({...p,rank:p.taskId in rankByTask?rankByTask[p.taskId]:null}));
 }
 
-function CompetitorsPanel({competitors,clientCid,selectedCid,onSelect,onCompare}){
+function CompetitorsPanel({competitors,clientCid,selectedCid,onSelect,onCompare,listHeight=420}){
   if(!competitors||competitors.length===0){
     return(
       <div className="stitch-glass-card rounded-[20px] p-5 text-center">
@@ -4867,7 +4884,7 @@ function CompetitorsPanel({competitors,clientCid,selectedCid,onSelect,onCompare}
         <h4 className="font-bold text-brand-dark text-sm">Top Competitors</h4>
         <span className="text-xs text-muted-stone">{competitors.length} found</span>
       </div>
-      <div className="space-y-0.5 max-h-[420px] overflow-y-auto">
+      <div className="space-y-0.5 overflow-y-auto" style={{maxHeight:listHeight}}>
         {competitors.map((c,i)=>{
           const isTarget=clientCid&&c.cid===clientCid;
           const hasMap=!!c.grid;
@@ -4996,7 +5013,7 @@ function RankMapDetail({snapshot,client}){
   const displayGrid=selectedCompetitor?buildCompetitorGrid(snapshot.grid,selectedCompetitor):snapshot.grid;
   const displayName=selectedCompetitor?selectedCompetitor.title:snapshot.businessName;
   return(
-    <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-3 items-start">
+    <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-3 items-start">
       <div>
         {selectedCompetitor&&(
           <div className="flex items-center gap-2 mb-2 flex-wrap">
@@ -5004,9 +5021,9 @@ function RankMapDetail({snapshot,client}){
             <span className="text-xs text-muted-stone">Viewing: <span className="font-bold text-brand-dark">{displayName}</span></span>
           </div>
         )}
-        <LeafletHeatMap points={displayGrid} centerLat={snapshot.centerLat} centerLng={snapshot.centerLng} businessName={displayName} address={selectedCompetitor?undefined:client.address} keyword={snapshot.keyword} gridSize={snapshot.gridSize} radiusMiles={snapshot.radiusMiles}/>
+        <LeafletHeatMap points={displayGrid} centerLat={snapshot.centerLat} centerLng={snapshot.centerLng} businessName={displayName} address={selectedCompetitor?undefined:client.address} keyword={snapshot.keyword} gridSize={snapshot.gridSize} radiusMiles={snapshot.radiusMiles} mapHeight={640}/>
       </div>
-      <CompetitorsPanel competitors={competitors} clientCid={snapshot.mapsCid||client.mapsCid} selectedCid={selectedCid} onSelect={setSelectedCid} onCompare={setCompareCid}/>
+      <CompetitorsPanel competitors={competitors} clientCid={snapshot.mapsCid||client.mapsCid} selectedCid={selectedCid} onSelect={setSelectedCid} onCompare={setCompareCid} listHeight={640}/>
       <CompetitorMatchupModal open={!!compareCompetitor} onClose={()=>setCompareCid(null)} snapshot={snapshot} client={client} competitor={compareCompetitor}/>
     </div>
   );
