@@ -1,0 +1,57 @@
+import type { Context, Config } from "@netlify/functions";
+import { isAuthed, unauthorized } from "../../shared/auth.mts";
+
+// One-time lookup: given a business name + address, finds its Google Place ID
+// and precise lat/lng. Heat maps match the target business by Place ID (not
+// name string), which is what makes rank matching unambiguous — two "Arbor
+// Care" businesses in different cities never get confused. Cache the result
+// on the client record so this only runs once per client.
+
+const PLACES_SEARCH = "https://places.googleapis.com/v1/places:searchText";
+
+function json(o: any, status = 200) {
+  return new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json" } });
+}
+
+export default async (req: Request, _ctx: Context) => {
+  if (!(await isAuthed(req))) return unauthorized();
+  if (req.method !== "POST") return json({ error: "POST only" }, 405);
+
+  let body: any;
+  try { body = await req.json(); } catch { return json({ error: "Invalid JSON body" }, 400); }
+
+  const name: string = (body.name || "").trim();
+  const address: string = (body.address || "").trim();
+  if (!name) return json({ error: "name is required" }, 400);
+
+  const apiKey = Netlify.env.get("GOOGLE_PLACES_KEY");
+  if (!apiKey) return json({ error: "GOOGLE_PLACES_KEY not configured on the server" }, 500);
+
+  try {
+    const res = await fetch(PLACES_SEARCH, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "X-Goog-Api-Key": apiKey,
+        "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location",
+      },
+      body: JSON.stringify({ textQuery: `${name} ${address}`.trim() }),
+    });
+    const data = await res.json();
+    if (!res.ok) return json({ error: data.error?.message || `Places API ${res.status}` }, 502);
+    const place = data.places?.[0];
+    if (!place) return json({ error: "No matching business found. Try adding more of the address." }, 404);
+
+    return json({
+      placeId: place.id,
+      name: place.displayName?.text || name,
+      address: place.formattedAddress || address,
+      lat: place.location?.latitude,
+      lng: place.location?.longitude,
+    });
+  } catch (e: any) {
+    return json({ error: String(e?.message || e) }, 500);
+  }
+};
+
+export const config: Config = { path: "/api/lookup-place" };

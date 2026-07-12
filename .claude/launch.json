@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "static-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["-y", "serve", "public", "-l", "5178"],
+      "port": 5178
+    }
+  ]
+}

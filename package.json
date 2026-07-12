@@ -1,0 +1,11 @@
+{
+  "name": "kailenflow-suite-functions",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Netlify functions for the KailenFlow Suite",
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0",
+    "firebase-admin": "^12.7.0",
+    "tweetsodium": "^0.0.5"
+  }
+}
