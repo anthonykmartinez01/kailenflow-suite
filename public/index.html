@@ -4500,7 +4500,7 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
       const ne=map.latLngToContainerPoint(bounds.getNorthEast());
       spacingPx=Math.hypot(ne.x-nw.x,ne.y-nw.y)/(gridSize-1);
     }
-    const iconSize=Math.round(clamp(spacingPx*0.72,18,34));
+    const iconSize=Math.round(clamp(spacingPx*0.85,20,40));
     const heatRadius=clamp(spacingPx*0.55,12,45);
     const heatBlur=clamp(spacingPx*0.42,9,35);
 
