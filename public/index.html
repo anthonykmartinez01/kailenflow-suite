@@ -4294,6 +4294,21 @@ const heatRankColor=(rank)=>{
   return'#ef4444';                // 11-20 — found, but far
 };
 const heatIntensity=(rank)=>rank?Math.max(0.15,1-((rank-1)/20)):0.02;
+// Mirrors buildGrid()'s circular clip (netlify/shared/heatmap.mts) so the
+// point count/cost shown before generating matches what actually gets
+// submitted — the ratio of surviving points is purely a function of
+// gridSize (radiusMiles cancels out of the circle-vs-square math), so this
+// doesn't need to know the radius at all.
+const circularGridCount=(n)=>{
+  if(n<=1)return n;
+  let count=0;
+  const step=2/(n-1);
+  for(let row=0;row<n;row++)for(let col=0;col<n;col++){
+    const mLat=row*step-1,mLng=col*step-1;
+    if(Math.hypot(mLat,mLng)<=1+1e-9)count++;
+  }
+  return count;
+};
 
 function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword,gridSize,radiusMiles}){
   const containerRef=useRef(null);
@@ -4527,7 +4542,7 @@ function LiveHeatMapGenerator({client,setData}){
     setData(prev=>{const nd={...prev,clients:prev.clients.map(c=>c.id===client.id?{...c,rankMaps:(c.rankMaps||[]).filter(m=>m.id!==id)}:c)};saveData(nd);return nd});
   };
 
-  const estCost=(Math.pow(gridSize,2)*0.0019).toFixed(3); // observed real rate: $0.15 for an 81-pt grid, not DataForSEO's advertised $0.0006
+  const estCost=(circularGridCount(gridSize)*0.0019).toFixed(3); // observed real rate: ~$0.0019/pt, not DataForSEO's advertised $0.0006 — point count is the circular-clipped count, not gridSize²
 
   return(
     <div className="stitch-glass-card rounded-[24px] p-6 space-y-4 font-manrope">
@@ -4576,7 +4591,7 @@ function LiveHeatMapGenerator({client,setData}){
             <div>
               <label className="text-xs text-muted-stone">Grid size</label>
               <select value={gridSize} onChange={e=>setGridSize(Number(e.target.value))} className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl text-sm focus:ring-1 focus:ring-brand focus:outline-none">
-                {[3,5,7,9,11,13].map(n=><option key={n} value={n}>{n}×{n} ({n*n} pts)</option>)}
+                {[3,5,7,9,11,13].map(n=><option key={n} value={n}>{n}×{n} ({circularGridCount(n)} pts)</option>)}
               </select>
             </div>
             <div>

@@ -8,16 +8,24 @@ import { dataForSeoHeaders } from "./dataforseo.mts";
 export interface GridPoint { lat: number; lng: number; row: number; col: number; }
 
 // Builds an N x N grid of {lat,lng} centered on (centerLat, centerLng),
-// spanning radiusMiles in every direction.
+// clipped to a circle of radius radiusMiles — NOT a full square. A plain
+// square grid's corners sit at radiusMiles*sqrt(2) from center (~41%
+// farther out than the requested radius), which both mis-states what
+// "radius" means and doesn't match the circular grids every other rank-
+// tracking tool in this space (Local Falcon, GridMySEO, etc.) produces for
+// the same N/radius inputs. Dropping the corner points also means fewer
+// billed DataForSEO tasks for the same N.
 export function buildGrid(centerLat: number, centerLng: number, gridSize: number, radiusMiles: number): GridPoint[] {
   const points: GridPoint[] = [];
   const milesPerDegLat = 69.0;
   const milesPerDegLng = 69.0 * Math.cos((centerLat * Math.PI) / 180);
   const step = gridSize > 1 ? (radiusMiles * 2) / (gridSize - 1) : 0;
+  const eps = 1e-9; // float slop so exact-boundary points (row/col at the very edge) aren't dropped
   for (let row = 0; row < gridSize; row++) {
     for (let col = 0; col < gridSize; col++) {
       const milesFromCenterLat = row * step - radiusMiles;
       const milesFromCenterLng = col * step - radiusMiles;
+      if (Math.hypot(milesFromCenterLat, milesFromCenterLng) > radiusMiles + eps) continue;
       points.push({
         lat: centerLat + milesFromCenterLat / milesPerDegLat,
         lng: centerLng + milesFromCenterLng / milesPerDegLng,
