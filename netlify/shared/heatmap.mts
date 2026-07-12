@@ -8,24 +8,33 @@ import { dataForSeoHeaders } from "./dataforseo.mts";
 export interface GridPoint { lat: number; lng: number; row: number; col: number; }
 
 // Builds an N x N grid of {lat,lng} centered on (centerLat, centerLng),
-// clipped to a circle of radius radiusMiles — NOT a full square. A plain
-// square grid's corners sit at radiusMiles*sqrt(2) from center (~41%
-// farther out than the requested radius), which both mis-states what
-// "radius" means and doesn't match the circular grids every other rank-
-// tracking tool in this space (Local Falcon, GridMySEO, etc.) produces for
-// the same N/radius inputs. Dropping the corner points also means fewer
-// billed DataForSEO tasks for the same N.
+// clipped to a circle — NOT a full square. A plain square grid's corners
+// sit sqrt(2)x farther from center than its edges, which is visually a
+// much bigger/denser footprint than the diamond/circular grid every
+// comparable rank-tracking tool (Local Falcon, GridMySEO, etc.) produces.
+// Dropping the corner points also means fewer billed DataForSEO tasks.
+//
+// IMPORTANT: radiusMiles is the distance BETWEEN each adjacent grid point
+// (matches how "Radius" is defined in Local Falcon/GridMySEO), NOT the
+// total half-width of the grid. So total coverage grows with gridSize at
+// a fixed radiusMiles — a 9x9 grid at 1mi genuinely covers more ground
+// than a 5x5 at 1mi, same as every comparable tool. (An earlier version of
+// this function treated radiusMiles as the fixed total half-width instead,
+// so every gridSize at the same radius covered the identical area — only
+// point density changed, not coverage — which didn't match user
+// expectations or the reference tools this app is meant to mirror.)
 export function buildGrid(centerLat: number, centerLng: number, gridSize: number, radiusMiles: number): GridPoint[] {
   const points: GridPoint[] = [];
   const milesPerDegLat = 69.0;
   const milesPerDegLng = 69.0 * Math.cos((centerLat * Math.PI) / 180);
-  const step = gridSize > 1 ? (radiusMiles * 2) / (gridSize - 1) : 0;
+  const step = radiusMiles; // distance between adjacent points
+  const coverageRadius = gridSize > 1 ? radiusMiles * (gridSize - 1) / 2 : 0; // center-to-edge distance
   const eps = 1e-9; // float slop so exact-boundary points (row/col at the very edge) aren't dropped
   for (let row = 0; row < gridSize; row++) {
     for (let col = 0; col < gridSize; col++) {
-      const milesFromCenterLat = row * step - radiusMiles;
-      const milesFromCenterLng = col * step - radiusMiles;
-      if (Math.hypot(milesFromCenterLat, milesFromCenterLng) > radiusMiles + eps) continue;
+      const milesFromCenterLat = row * step - coverageRadius;
+      const milesFromCenterLng = col * step - coverageRadius;
+      if (Math.hypot(milesFromCenterLat, milesFromCenterLng) > coverageRadius + eps) continue;
       points.push({
         lat: centerLat + milesFromCenterLat / milesPerDegLat,
         lng: centerLng + milesFromCenterLng / milesPerDegLng,
