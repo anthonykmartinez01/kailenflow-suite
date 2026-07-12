@@ -73,7 +73,6 @@ tailwind.config = {
 .stitch-hover-lift{transition:transform .3s cubic-bezier(0.34,1.56,0.64,1)}
 .stitch-hover-lift:hover{transform:translateY(-4px)}
 .material-symbols-outlined{font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 24}
-.heatmap-lighten .leaflet-tile-pane{filter:brightness(1.55) saturate(1.15) contrast(0.92)}
 </style>
 </head>
 <body class="bg-brand-warm">
@@ -4299,8 +4298,23 @@ const heatIntensity=(rank)=>rank?Math.max(0.15,1-((rank-1)/20)):0.02;
 function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword,gridSize,radiusMiles}){
   const containerRef=useRef(null);
   const mapRef=useRef(null);
+  const wrapperRef=useRef(null);
+  const [isFullscreen,setIsFullscreen]=useState(false);
   const found=points.filter(p=>p.rank);
   const solv=points.length?Math.round((points.filter(p=>p.rank&&p.rank<=3).length/points.length)*1000)/10:0;
+
+  useEffect(()=>{
+    const onFsChange=()=>{
+      setIsFullscreen(document.fullscreenElement===wrapperRef.current);
+      setTimeout(()=>mapRef.current?.invalidateSize(),60);
+    };
+    document.addEventListener('fullscreenchange',onFsChange);
+    return()=>document.removeEventListener('fullscreenchange',onFsChange);
+  },[]);
+  const toggleFullscreen=()=>{
+    if(document.fullscreenElement){document.exitFullscreen?.()}
+    else{wrapperRef.current?.requestFullscreen?.()}
+  };
 
   useEffect(()=>{
     if(!containerRef.current||typeof L==='undefined'||points.length===0)return;
@@ -4308,6 +4322,15 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
     const map=L.map(containerRef.current,{zoomControl:true});
     mapRef.current=map;
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'© OpenStreetMap © CARTO',maxZoom:20,subdomains:'abcd'}).addTo(map);
+
+    // A multiplicative brightness() filter barely moves near-black pixels
+    // (dark_all's base tiles sit around rgb(10,14,20) in most areas — even
+    // at 1.55x that's still practically black), which is why the earlier
+    // filter-based attempt looked unchanged. An additive "screen" blend
+    // overlay lifts dark pixels reliably regardless of how dark they start.
+    const lightenOverlay=document.createElement('div');
+    lightenOverlay.style.cssText='position:absolute;inset:0;background:rgba(71,93,133,0.55);mix-blend-mode:screen;pointer-events:none;z-index:250;';
+    containerRef.current.appendChild(lightenOverlay);
 
     // Fit to the grid's real extent instead of a fixed zoom level — a tight
     // 1mi-radius grid and a wide 5mi one both used to render at the same
@@ -4362,8 +4385,8 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
   },[points,centerLat,centerLng,gridSize]);
 
   return(
-    <div className="rounded-xl overflow-hidden border" style={{background:'#1e293b'}}>
-      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-white" style={{background:'#1e293b'}}>
+    <div ref={wrapperRef} className={`overflow-hidden border ${isFullscreen?'flex flex-col h-full w-full':'rounded-xl'}`} style={{background:'#1e293b'}}>
+      <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-white flex-shrink-0" style={{background:'#1e293b'}}>
         <div>
           <div className="font-bold text-sm">{businessName}</div>
           {address&&<div className="text-[11px] text-gray-300">{address}</div>}
@@ -4374,9 +4397,12 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
           <span>Radius {radiusMiles}mi</span>
           <span>Points {points.length}</span>
           <span className="px-2 py-1 rounded-full font-bold" style={{background:'#22c55e22',color:'#4ade80'}}>SoLV {solv}%</span>
+          <button onClick={toggleFullscreen} className="touch-target w-8 h-8 flex items-center justify-center rounded-lg hover:bg-white/10 text-white flex-shrink-0" title={isFullscreen?'Exit full screen':'Full screen'}>
+            <span className="material-symbols-outlined text-[18px]">{isFullscreen?'fullscreen_exit':'fullscreen'}</span>
+          </button>
         </div>
       </div>
-      <div ref={containerRef} className="heatmap-lighten" style={{height:440}}/>
+      <div ref={containerRef} className={isFullscreen?'flex-1 min-h-0':''} style={isFullscreen?{position:'relative'}:{height:440,position:'relative'}}/>
     </div>
   );
 }
