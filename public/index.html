@@ -789,46 +789,265 @@ function TodaysTasks({data,setData}){
 }
 
 // ─── Client Dashboard ───
-function ClientDashboard({client,data,setData}){
-  const c=client;const tasks=c.tasks;
-  const inProgress=tasks.filter(t=>t.status==='In Progress').length;
-  const overdue=tasks.filter(t=>t.date<today()&&t.status!=='Completed').length;
-  const completed=tasks.filter(t=>t.status==='Completed').length;
-  const total=tasks.length;const implPct=total?Math.round(completed/total*100):0;
-  const phaseData=PHASES.map(p=>{const pts=tasks.filter(t=>t.phase===p);const done=pts.filter(t=>t.status==='Completed').length;return{phase:p,total:pts.length,done,pct:pts.length?Math.round(done/pts.length*100):0}}).filter(p=>p.total>0);
-  const upcoming=tasks.filter(t=>t.status!=='Completed'&&t.date>=today()).sort((a,b)=>a.date.localeCompare(b.date)).slice(0,5);
-  const recent=c.activities.sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)).slice(0,5);
+function ClientDashboard({client,data,setData,setTab}){
+  const c=client;
+  const parseSolv=(s)=>{if(s==null)return null;const n=parseFloat(String(s).replace('%',''));return isNaN(n)?null:n};
+
+  // Same keyword-grouping logic as RankingsTab, so this rolls up into
+  // consistent numbers with what that tab shows per-keyword.
+  const keywordGroups=useMemo(()=>{
+    const groups={};
+    (c.rankMaps||[]).forEach(m=>{
+      const kw=m.keyword?.toLowerCase().trim();
+      if(!kw||kw==='unknown')return;
+      if(!groups[kw])groups[kw]={keyword:m.keyword,snapshots:[]};
+      groups[kw].snapshots.push(m);
+    });
+    Object.values(groups).forEach(g=>g.snapshots.sort((a,b)=>(b.snapshotDate||b.completedAt||'').toString().localeCompare((a.snapshotDate||a.completedAt||'').toString())));
+    return Object.values(groups);
+  },[c.rankMaps]);
+
+  const latestByKeyword=keywordGroups.map(g=>g.snapshots[0]).filter(Boolean);
+  const solvValues=latestByKeyword.map(m=>typeof m.solv==='number'?m.solv:parseSolv(m.solv)).filter(v=>v!=null);
+  const avgSolv=solvValues.length?solvValues.reduce((a,b)=>a+b,0)/solvValues.length:null;
+  const rankValues=latestByKeyword.map(m=>m.avgRank).filter(v=>v!=null&&v>0);
+  const avgLocalRank=rankValues.length?rankValues.reduce((a,b)=>a+b,0)/rankValues.length:null;
+
+  const prevByKeyword=keywordGroups.map(g=>g.snapshots[1]).filter(Boolean);
+  const prevSolvValues=prevByKeyword.map(m=>typeof m.solv==='number'?m.solv:parseSolv(m.solv)).filter(v=>v!=null);
+  const prevAvgSolv=prevSolvValues.length?prevSolvValues.reduce((a,b)=>a+b,0)/prevSolvValues.length:null;
+  const solvChangePct=(avgSolv!=null&&prevAvgSolv!=null&&prevAvgSolv>0)?((avgSolv-prevAvgSolv)/prevAvgSolv*100):null;
+
+  const genPages=c.generatedPages||[];
+  const locationPagesGenerated=genPages.filter(p=>p.type==='location').length;
+  const locationPagesTotal=(c.architecture&&c.architecture.locationPages)?c.architecture.locationPages.length:0;
+  const lastCrawl=(c.contentGap||{}).lastCrawl;
+  const pageSpeedScore=c.pageSpeed?.mobile?.score;
+
+  const latestLiveMap=(c.rankMaps||[]).filter(m=>m.generatedBy==='live'&&m.status==='complete').sort((a,b)=>(b.completedAt||0)-(a.completedAt||0))[0];
+  const avatarLetter=(c.name||'?').charAt(0).toUpperCase();
 
   return(
-    <div className="fade-in font-manrope">
-      <h2 className="text-2xl font-bold text-brand-dark mb-1">{c.name}</h2>
-      <p className="text-sm text-muted-stone mb-6">{c.primaryCategory} — {c.city}, {c.state}</p>
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-        <div className="stitch-glass-card stitch-hover-lift rounded-[20px] p-4 flex flex-col items-center relative"><ScoreRing value={c.scores.gbpHealth.current} size={80} label="GBP Health" subtitle={`→${c.scores.gbpHealth.projected}%`}/></div>
-        <div className="stitch-glass-card stitch-hover-lift rounded-[20px] p-4 flex flex-col items-center relative"><ScoreRing value={c.scores.landingPage.current} size={80} label="Landing Page"/></div>
-        <div className="stitch-glass-card stitch-hover-lift rounded-[20px] p-4 flex flex-col items-center relative"><ScoreRing value={c.scores.core30.current} max={c.scores.core30.total||1} size={80} label="Core 30" subtitle={`${c.scores.core30.current}/${c.scores.core30.total}`}/></div>
-        <div className="stitch-glass-card stitch-hover-lift rounded-[20px] p-4 flex flex-col items-center relative"><ScoreRing value={implPct} size={80} label="Implementation"/></div>
-      </div>
-      <div className="grid grid-cols-3 gap-3 mb-6">
-        <div className="stitch-glass-card rounded-[20px] p-3 text-center"><p className="text-2xl font-bold text-yellow-600">{inProgress}</p><p className="text-xs text-muted-stone">In Progress</p></div>
-        <div className="stitch-glass-card rounded-[20px] p-3 text-center"><p className="text-2xl font-bold text-red-600">{overdue}</p><p className="text-xs text-muted-stone">Overdue</p></div>
-        <div className="stitch-glass-card rounded-[20px] p-3 text-center"><p className="text-2xl font-bold text-green-600">{completed}</p><p className="text-xs text-muted-stone">Completed</p></div>
+    <div className="fade-in font-manrope space-y-4">
+      {/* Header: identity + latest heat map */}
+      <div className="stitch-glass-card rounded-[24px] overflow-hidden">
+        <div className="grid grid-cols-1 lg:grid-cols-[1fr_380px]">
+          <div className="p-6">
+            <div className="flex items-start gap-4">
+              <div className="w-16 h-16 rounded-full bg-brand/15 text-brand flex items-center justify-center font-bold text-2xl flex-shrink-0">{avatarLetter}</div>
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h2 className="text-2xl font-bold text-brand-dark truncate">{c.name}</h2>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Active</span>
+                </div>
+                {c.primaryCategory&&<p className="text-sm text-brand font-medium mt-0.5">{c.primaryCategory}</p>}
+              </div>
+            </div>
+            <div className="mt-4 space-y-2 text-sm">
+              {(c.address||c.city)&&(
+                <div className="flex items-center gap-2 text-deep-obsidian/70">
+                  <span className="material-symbols-outlined text-[18px] text-muted-stone">location_on</span>
+                  <span>{[c.address,c.city,c.state].filter(Boolean).join(', ')}</span>
+                </div>
+              )}
+              {c.website&&(
+                <div className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-[18px] text-muted-stone">language</span>
+                  <a href={c.website.startsWith('http')?c.website:'https://'+c.website} target="_blank" rel="noopener noreferrer" className="text-brand hover:underline truncate">Visit Website</a>
+                </div>
+              )}
+              {c.phone&&(
+                <div className="flex items-center gap-2 text-deep-obsidian/70">
+                  <span className="material-symbols-outlined text-[18px] text-muted-stone">call</span>
+                  <a href={`tel:${c.phone}`} className="hover:text-brand">{c.phone}</a>
+                </div>
+              )}
+            </div>
+            {setTab&&<button onClick={()=>setTab('settings')} className="touch-target mt-4 px-4 py-2 bg-brand text-white rounded-xl text-sm font-medium hover:bg-brand-hover shadow-lg shadow-brand/20">Business Settings</button>}
+          </div>
+          <div className="lg:border-l border-glass-border min-h-[220px]">
+            {latestLiveMap?(
+              <LeafletHeatMap points={latestLiveMap.grid} centerLat={latestLiveMap.centerLat} centerLng={latestLiveMap.centerLng} businessName={c.name} address={c.address} keyword={latestLiveMap.keyword} gridSize={latestLiveMap.gridSize} radiusMiles={latestLiveMap.radiusMiles}/>
+            ):(
+              <div className="h-full min-h-[220px] flex flex-col items-center justify-center text-center p-6 bg-black/[0.02]">
+                <span className="material-symbols-outlined text-3xl text-muted-stone mb-2">map</span>
+                <p className="text-sm text-muted-stone">No rank map yet</p>
+                {setTab&&<button onClick={()=>setTab('rankings')} className="text-xs text-brand hover:underline mt-1">Generate one in Rankings</button>}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
 
-      <div className="stitch-glass-card rounded-[24px] p-6 mb-6">
-        <h3 className="text-lg font-bold text-brand-dark mb-3">Phase Progress</h3>
-        {phaseData.map(p=>(<div key={p.phase} className="mb-3 last:mb-0"><div className="flex items-center justify-between mb-1"><PhaseBadge phase={p.phase}/><span className="text-xs text-muted-stone">{p.done}/{p.total}</span></div><div className="w-full h-2 bg-black/5 rounded-full overflow-hidden"><div className="h-full rounded-full transition-all duration-500" style={{width:`${p.pct}%`,backgroundColor:PHASE_COLORS[p.phase]}}/></div></div>))}
+      {/* Top-line stats — same icon-chip bento pattern + brand-accent hero
+          card as AllClientsOverview's stat row, for visual consistency
+          across the two dashboards. */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div className="bg-brand stitch-hover-lift p-6 rounded-[24px] flex flex-col justify-between min-h-[150px] text-white shadow-xl shadow-brand/20">
+          <div className="bg-white/20 p-3 rounded-xl w-fit"><span className="material-symbols-outlined text-white">visibility</span></div>
+          <div className="mt-4">
+            <p className="text-[11px] font-semibold opacity-80 uppercase tracking-widest mb-1">Market Visibility</p>
+            {avgSolv!=null?(
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-3xl font-bold">{avgSolv.toFixed(1)}%</h3>
+                {solvChangePct!=null&&Math.abs(solvChangePct)>=0.1&&(
+                  <span className="text-xs font-bold flex items-center gap-0.5 bg-white/20 px-1.5 py-0.5 rounded-full">
+                    <span className="material-symbols-outlined text-[14px]">{solvChangePct>0?'arrow_upward':'arrow_downward'}</span>{Math.abs(solvChangePct).toFixed(1)}%
+                  </span>
+                )}
+              </div>
+            ):<h3 className="text-3xl font-bold opacity-60">—</h3>}
+            <p className="text-[11px] opacity-70 mt-1">Share of Local Voice across {latestByKeyword.length} keyword{latestByKeyword.length!==1?'s':''}</p>
+          </div>
+        </div>
+        <div className="stitch-glass-card stitch-hover-lift p-6 rounded-[24px] flex flex-col justify-between min-h-[150px]">
+          <div className="bg-brand/10 p-3 rounded-xl w-fit"><span className="material-symbols-outlined text-brand">social_leaderboard</span></div>
+          <div className="mt-4">
+            <p className="text-[11px] font-semibold text-muted-stone uppercase tracking-widest mb-1">Avg. Rank</p>
+            <h3 className="text-3xl font-bold text-brand-dark">{avgLocalRank!=null?avgLocalRank.toFixed(1):'—'}</h3>
+            <p className="text-[11px] text-muted-stone mt-1">Average local pack position</p>
+          </div>
+        </div>
+        <div className="stitch-glass-card stitch-hover-lift p-6 rounded-[24px] flex flex-col justify-between min-h-[150px]">
+          <div className="bg-brand/10 p-3 rounded-xl w-fit"><span className="material-symbols-outlined text-brand">search</span></div>
+          <div className="mt-4">
+            <p className="text-[11px] font-semibold text-muted-stone uppercase tracking-widest mb-1">Organic Rankings</p>
+            {c.gscSummary?(
+              <>
+                <h3 className="text-3xl font-bold text-brand-dark">#{c.gscSummary.avgPosition.toFixed(1)}</h3>
+                <p className="text-[11px] text-muted-stone mt-1">Avg. Search Console position · as of {fmt(c.gscSummary.fetchedAt)}</p>
+              </>
+            ):(
+              <>
+                <h3 className="text-3xl font-bold text-muted-stone">—</h3>
+                {setTab&&<button onClick={()=>setTab('analytics')} className="text-xs text-brand hover:underline mt-1">Connect Search Console</button>}
+              </>
+            )}
+          </div>
+        </div>
       </div>
+
+      {/* Website + Analytics */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="stitch-glass-card rounded-[24px] p-6">
-          <h3 className="text-lg font-bold text-brand-dark mb-3">Upcoming Tasks</h3>
-          {upcoming.length===0&&<p className="text-sm text-muted-stone">No upcoming tasks</p>}
-          {upcoming.map(t=>(<div key={t.id} className="flex items-center gap-2 py-2 border-b border-glass-border last:border-0"><PhaseBadge phase={t.phase}/><span className="flex-1 text-sm truncate">{t.title}</span><span className="text-xs text-muted-stone">{fmt(t.date)}</span></div>))}
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-bold text-brand-dark">Website</h3>
+            {setTab&&<button onClick={()=>setTab('analytics')} className="text-xs text-brand hover:underline">View Details</button>}
+          </div>
+          {c.website?(
+            <div className="flex items-center gap-3 mb-4">
+              <span className="material-symbols-outlined text-2xl text-brand flex-shrink-0">language</span>
+              <a href={c.website.startsWith('http')?c.website:'https://'+c.website} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-brand-dark hover:underline truncate">{c.website}</a>
+            </div>
+          ):<p className="text-sm text-muted-stone mb-4">No website on file</p>}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="bg-black/[0.03] rounded-xl p-4 flex items-center gap-3 relative">
+              {pageSpeedScore!=null?(
+                <>
+                  <ScoreRing value={pageSpeedScore} size={56} label=""/>
+                  <div>
+                    <p className="text-xs text-muted-stone">PageSpeed (Mobile)</p>
+                    {c.pageSpeed?.lastRun&&<p className="text-[11px] text-muted-stone">Last run {fmt(c.pageSpeed.lastRun)}</p>}
+                  </div>
+                </>
+              ):(
+                <div>
+                  <p className="text-xs text-muted-stone mb-1">PageSpeed</p>
+                  {setTab&&<button onClick={()=>setTab('analytics')} className="text-xs text-brand hover:underline">Run a test</button>}
+                </div>
+              )}
+            </div>
+            <div className="bg-black/[0.03] rounded-xl p-4">
+              <p className="text-xs text-muted-stone mb-1">Last Crawl</p>
+              <p className="text-sm font-medium text-deep-obsidian/80">{lastCrawl?fmt(lastCrawl):'Not crawled yet'}</p>
+            </div>
+            <div className="bg-black/[0.03] rounded-xl p-4">
+              <p className="text-xs text-muted-stone mb-1">Generated Pages</p>
+              <p className="text-xl font-bold text-brand-dark">{genPages.length}</p>
+            </div>
+            <div className="bg-black/[0.03] rounded-xl p-4">
+              <p className="text-xs text-muted-stone mb-1">Location Pages</p>
+              <p className="text-xl font-bold text-brand-dark">{locationPagesTotal?`${locationPagesGenerated}/${locationPagesTotal}`:locationPagesGenerated}</p>
+            </div>
+          </div>
         </div>
+
         <div className="stitch-glass-card rounded-[24px] p-6">
-          <h3 className="text-lg font-bold text-brand-dark mb-3">Recent Activity</h3>
-          {recent.length===0&&<p className="text-sm text-muted-stone">No activity yet</p>}
-          {recent.map(a=>(<div key={a.id} className="py-2 border-b border-glass-border last:border-0"><div className="flex items-center gap-2"><span className="text-sm flex-1">{a.text}</span>{a.autoGenerated&&<span className="text-[10px] bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded-full whitespace-nowrap">Auto-logged</span>}</div><span className="text-xs text-muted-stone">{fmt(a.createdAt)}</span></div>))}
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-bold text-brand-dark">Google Analytics</h3>
+            {setTab&&<button onClick={()=>setTab('analytics')} className="text-xs text-brand hover:underline">View Details</button>}
+          </div>
+          {c.ga4Summary?(
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-black/[0.03] rounded-xl p-4 text-center">
+                  <p className="text-xs text-muted-stone mb-1">Users</p>
+                  <p className="text-xl font-bold text-brand-dark">{Math.round(c.ga4Summary.totalUsers).toLocaleString()}</p>
+                </div>
+                <div className="bg-black/[0.03] rounded-xl p-4 text-center">
+                  <p className="text-xs text-muted-stone mb-1">Sessions</p>
+                  <p className="text-xl font-bold text-brand-dark">{Math.round(c.ga4Summary.totalSessions).toLocaleString()}</p>
+                </div>
+                <div className="bg-black/[0.03] rounded-xl p-4 text-center">
+                  <p className="text-xs text-muted-stone mb-1">Conversions</p>
+                  <p className="text-xl font-bold text-brand-dark">{Math.round(c.ga4Summary.totalConversions).toLocaleString()}</p>
+                </div>
+                <div className="bg-black/[0.03] rounded-xl p-4 text-center">
+                  <p className="text-xs text-muted-stone mb-1">Engagement</p>
+                  <p className="text-xl font-bold text-brand-dark">{c.ga4Summary.avgEngagementRate.toFixed(1)}%</p>
+                </div>
+              </div>
+              <p className="text-[11px] text-muted-stone mt-3">Last 28 days · as of {fmt(c.ga4Summary.fetchedAt)}</p>
+            </>
+          ):(
+            <div className="text-center py-6">
+              <p className="text-sm text-muted-stone mb-2">Not connected yet</p>
+              {setTab&&<button onClick={()=>setTab('analytics')} className="text-xs text-brand hover:underline">Connect Google Analytics</button>}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Local + Organic keywords */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="stitch-glass-card rounded-[24px] p-6">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-bold text-brand-dark">Local Keywords</h3>
+            {setTab&&<button onClick={()=>setTab('rankings')} className="text-xs text-brand hover:underline">View Details</button>}
+          </div>
+          {keywordGroups.length===0&&<p className="text-sm text-muted-stone">No rank map data yet</p>}
+          <div className="space-y-1">
+            {keywordGroups.slice(0,6).map(g=>{
+              const latest=g.snapshots[0];
+              const solvVal=typeof latest.solv==='number'?latest.solv:parseSolv(latest.solv);
+              return(
+                <div key={g.keyword} className="flex items-center justify-between py-2 border-b border-glass-border last:border-0 gap-2">
+                  <span className="text-sm font-medium text-deep-obsidian/80 truncate">{g.keyword}</span>
+                  <div className="flex items-center gap-3 flex-shrink-0 text-xs text-muted-stone">
+                    <span>Visibility: {solvVal!=null?solvVal.toFixed(1)+'%':'—'}</span>
+                    <span>Avg Rank: {latest.avgRank||'—'}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="stitch-glass-card rounded-[24px] p-6">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-lg font-bold text-brand-dark">Organic Search Keywords</h3>
+            {setTab&&<button onClick={()=>setTab('analytics')} className="text-xs text-brand hover:underline">Full List</button>}
+          </div>
+          {!c.gscSummary&&<p className="text-sm text-muted-stone">Connect Search Console in Analytics to see this.</p>}
+          {c.gscSummary&&(c.gscSummary.topQueries||[]).length===0&&<p className="text-sm text-muted-stone">No query data yet.</p>}
+          <div className="space-y-1">
+            {(c.gscSummary?.topQueries||[]).map((q,i)=>(
+              <div key={i} className="flex items-center justify-between py-2 border-b border-glass-border last:border-0 gap-2">
+                <span className="text-sm font-medium text-deep-obsidian/80 truncate">{q.query}</span>
+                <span className="text-xs text-muted-stone flex-shrink-0">#{q.position.toFixed(1)}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
@@ -3997,17 +4216,27 @@ function GSCSection({client,setData,data}){
       const noRows=!summary.rows||summary.rows.length===0;
       if(noRows&&(!queries.rows||queries.rows.length===0)){setGscState('nodata');setGscError('No search data available for this property in the last 28 days.');return}
 
+      const queryRows=(queries.rows||[]).map(r=>({query:r.keys[0],clicks:r.clicks,impressions:r.impressions,ctr:(r.ctr*100),position:r.position}));
       setGscData({
         totalClicks:s.clicks||0,
         totalImpressions:s.impressions||0,
         avgCtr:(s.ctr||0)*100,
         avgPosition:s.position||0,
-        queries:(queries.rows||[]).map(r=>({query:r.keys[0],clicks:r.clicks,impressions:r.impressions,ctr:(r.ctr*100),position:r.position})),
+        queries:queryRows,
         pages:(pages.rows||[]).map(r=>({page:r.keys[0],clicks:r.clicks,impressions:r.impressions,ctr:(r.ctr*100),position:r.position})),
         daily:(daily.rows||[]).map(r=>({date:r.keys[0],clicks:r.clicks,impressions:r.impressions})),
         devices:(devices.rows||[]).map(r=>({device:r.keys[0],clicks:r.clicks,impressions:r.impressions}))
       });
       setGscState('loaded');
+
+      // Cache a lightweight summary onto the client so other tabs (e.g. the
+      // Dashboard) can show real GSC numbers without forcing their own
+      // OAuth reconnect — this data otherwise lives only in this
+      // component's state and disappears when you leave the tab.
+      if(setData){
+        const summary={totalClicks:s.clicks||0,totalImpressions:s.impressions||0,avgCtr:(s.ctr||0)*100,avgPosition:s.position||0,topQueries:queryRows.slice(0,5),fetchedAt:Date.now()};
+        setData(prev=>{const nd={...prev,clients:prev.clients.map(c=>c.id===client.id?{...c,gscSummary:summary}:c)};saveData(nd);return nd});
+      }
     }catch(e){
       if(e.message!=='token_expired'){setGscState('error');setGscError('Failed to load GSC data: '+e.message)}
     }
@@ -4435,16 +4664,22 @@ function GA4Section({client,setData,data}){
       if(!sRow){setGaState('nodata');setGaError('No analytics data available for this property in the last 28 days.');return}
 
       const mv=(row,i)=>parseFloat(row.metricValues?.[i]?.value||0);
+      const totals={totalUsers:mv(sRow,0),totalSessions:mv(sRow,1),totalConversions:mv(sRow,2),avgEngagementRate:mv(sRow,3)*100};
       setGaData({
-        totalUsers:mv(sRow,0),
-        totalSessions:mv(sRow,1),
-        totalConversions:mv(sRow,2),
-        avgEngagementRate:mv(sRow,3)*100,
+        ...totals,
         daily:(daily.rows||[]).map(r=>({date:r.dimensionValues[0].value,sessions:parseFloat(r.metricValues[0].value||0),users:parseFloat(r.metricValues[1].value||0)})),
         pages:(pages.rows||[]).map(r=>({page:r.dimensionValues[0].value,views:parseFloat(r.metricValues[0].value||0),sessions:parseFloat(r.metricValues[1].value||0)})),
         channels:(channels.rows||[]).map(r=>({channel:r.dimensionValues[0].value,sessions:parseFloat(r.metricValues[0].value||0)}))
       });
       setGaState('loaded');
+
+      // Cache a lightweight summary onto the client, same reasoning as
+      // GSCSection's gscSummary — lets the Dashboard show real numbers
+      // without its own OAuth reconnect.
+      if(setData){
+        const summary={...totals,fetchedAt:Date.now()};
+        setData(prev=>{const nd={...prev,clients:prev.clients.map(c=>c.id===client.id?{...c,ga4Summary:summary}:c)};saveData(nd);return nd});
+      }
     }catch(e){
       if(e.message!=='token_expired'){setGaState('error');setGaError('Failed to load GA4 data: '+e.message)}
     }
@@ -8390,7 +8625,7 @@ function AuthenticatedApp(){
               <div className="no-print font-manrope flex gap-2 mb-6 overflow-x-auto pb-1 -mx-4 px-4 sm:mx-0 sm:px-0">
                 {tabs.map(t=>(<button key={t.key} onClick={()=>setTab(t.key)} className={`touch-target flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-all ${tab===t.key?'bg-brand text-white shadow-lg shadow-brand/20':'stitch-glass-card text-deep-obsidian/70 hover:bg-black/5'}`}><span className="material-symbols-outlined text-[18px] hidden sm:inline">{t.icon}</span>{t.label}</button>))}
               </div>
-              {tab==='dashboard'&&<ClientDashboard client={client} data={data} setData={setData}/>}
+              {tab==='dashboard'&&<ClientDashboard client={client} data={data} setData={setData} setTab={setTab}/>}
               {tab==='tasks'&&<TasksTab client={client} setData={setData}/>}
               {tab==='rankings'&&<RankingsTab client={client} setData={setData}/>}
 {tab==='analytics'&&<AnalyticsTab client={client} setData={setData} data={data}/>}
