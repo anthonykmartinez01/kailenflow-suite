@@ -5021,7 +5021,17 @@ function MiniHeatDots({grid,size=40}){
   );
 }
 
-function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword,gridSize,radiusMiles,mapHeight=440,tightZoom=true}){
+function LeafletHeatMap({points:rawPoints,centerLat,centerLng,businessName,address,keyword,gridSize,radiusMiles,mapHeight=440,tightZoom=true}){
+  // Defensive filter — a point with a missing/NaN lat or lng (older/legacy
+  // entries, a corrupted grid, whatever the exact cause) fed into
+  // L.latLngBounds produces a degenerate bounds. Reported live: a real
+  // rank map showing the ENTIRE North American continent zoomed all the
+  // way out with only the single business-location pin visible — that's
+  // exactly what a degenerate-bounds fitBounds() call falls back to.
+  // Filtering here means every downstream bounds/zoom/marker calculation
+  // in this component only ever sees points that can't produce that
+  // failure mode, regardless of what corrupted the source data.
+  const points=(rawPoints||[]).filter(p=>Number.isFinite(p?.lat)&&Number.isFinite(p?.lng));
   const containerRef=useRef(null);
   const mapRef=useRef(null);
   const wrapperRef=useRef(null);
