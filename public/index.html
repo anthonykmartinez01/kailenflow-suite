@@ -4803,8 +4803,14 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
     };
   },[points,centerLat,centerLng,gridSize,isFullscreen]);
 
+  // isolate: Leaflet assigns its internal panes (tiles/markers/popups) z-index
+  // values in the 200-700 range for its OWN internal layering. Without this
+  // wrapper establishing its own stacking context, those values are compared
+  // at whatever ancestor context they land in instead — which let a
+  // still-mounted background map's marker pane (z-index 600) render on top of
+  // a modal opened above it (z-50), since 600 > 50 at that shared context.
   return(
-    <div ref={wrapperRef} className={`overflow-hidden border ${isFullscreen?'flex flex-col h-full w-full':'rounded-xl'}`} style={{background:'#1e293b'}}>
+    <div ref={wrapperRef} className={`relative isolate overflow-hidden border ${isFullscreen?'flex flex-col h-full w-full':'rounded-xl'}`} style={{background:'#1e293b'}}>
       <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-white flex-shrink-0" style={{background:'#1e293b'}}>
         <div>
           <div className="font-bold text-sm">{businessName}</div>
