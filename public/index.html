@@ -613,7 +613,6 @@ function Sidebar({clients,activeClient,setActiveClient,view,setView,onAddClient,
       {key:'scheduledpages',icon:'event_repeat',label:'Scheduled Pages'},
       {key:'indexing',icon:'travel_explore',label:'Indexing'},
       {key:'reports',icon:'description',label:'Reports'},
-      {key:'transcripts',icon:'mic',label:'InsideProsper'},
     ]},
   ];
 
@@ -901,27 +900,39 @@ function ClientDashboard({client,data,setData,setTab}){
   const latestLiveMap=(c.rankMaps||[]).filter(m=>m.generatedBy==='live'&&m.status==='complete').sort((a,b)=>(b.completedAt||0)-(a.completedAt||0))[0];
   const avatarLetter=(c.name||'?').charAt(0).toUpperCase();
 
-  // Pull the client's website hero image (its own og:image) once per
-  // client and cache it — undefined = never checked yet (will retry next
-  // visit), '' = checked, none found (stop retrying), a URL = found.
+  // Pull the client's website hero image (its own og:image) and cache it.
+  // A failed check (site has no og:image, blocked our fetch, timed out,
+  // etc.) used to be cached as '' FOREVER with no way to retry — a site
+  // that failed once (transient block, slow load) or has since added an
+  // og:image would just stay blank indefinitely. Now a failed check is
+  // only "sticky" for 7 days, and there's a manual retry link either way.
+  const HERO_RECHECK_MS=7*24*60*60*1000;
   const [heroImage,setHeroImage]=useState(c.heroImage||null);
+  const [heroChecking,setHeroChecking]=useState(false);
   const heroFetchedForRef=useRef(null);
+
+  const checkHeroImage=async()=>{
+    if(!c.website)return;
+    setHeroChecking(true);
+    try{
+      const r=await fetch('/api/fetch-hero-image',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({website:c.website})});
+      const j=await r.json();
+      const found=j.image||'';
+      if(found)setHeroImage(found);
+      else if(!j.image)console.warn(`[hero image] ${c.name}: ${j.reason||'no image found'}`);
+      if(setData){
+        setData(prev=>{const nd={...prev,clients:prev.clients.map(cl=>cl.id===c.id?{...cl,heroImage:found,heroImageCheckedAt:Date.now()}:cl)};saveData(nd);return nd});
+      }
+    }catch(e){/* silent — heroImageCheckedAt never gets set, so it retries next visit */}
+    setHeroChecking(false);
+  };
+
   useEffect(()=>{
     if(heroFetchedForRef.current===c.id)return;
     heroFetchedForRef.current=c.id;
     setHeroImage(c.heroImage||null);
-    if(c.heroImage!==undefined||!c.website)return;
-    (async()=>{
-      try{
-        const r=await fetch('/api/fetch-hero-image',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({website:c.website})});
-        const j=await r.json();
-        const found=j.image||'';
-        if(found)setHeroImage(found);
-        if(setData){
-          setData(prev=>{const nd={...prev,clients:prev.clients.map(cl=>cl.id===c.id?{...cl,heroImage:found}:cl)};saveData(nd);return nd});
-        }
-      }catch(e){/* silent — heroImage stays undefined, so it just retries next visit */}
-    })();
+    const staleEnough=!c.heroImageCheckedAt||(Date.now()-c.heroImageCheckedAt>HERO_RECHECK_MS);
+    if(!c.heroImage&&staleEnough)checkHeroImage();
   },[c.id,c.website]);
 
   return(
@@ -961,7 +972,12 @@ function ClientDashboard({client,data,setData,setTab}){
                 </div>
               )}
             </div>
-            {setTab&&<button onClick={()=>setTab('settings')} className="touch-target mt-4 px-4 py-2 bg-brand text-white rounded-xl text-sm font-medium hover:bg-brand-hover shadow-lg shadow-brand/20">Business Settings</button>}
+            <div className="flex items-center gap-3 mt-4 flex-wrap">
+              {setTab&&<button onClick={()=>setTab('settings')} className="touch-target px-4 py-2 bg-brand text-white rounded-xl text-sm font-medium hover:bg-brand-hover shadow-lg shadow-brand/20">Business Settings</button>}
+              {c.website&&!heroImage&&(
+                <button onClick={checkHeroImage} disabled={heroChecking} className="text-xs text-brand hover:underline disabled:opacity-50">{heroChecking?'Checking...':'Retry background image'}</button>
+              )}
+            </div>
           </div>
           <div className="lg:border-l border-glass-border min-h-[220px]">
             {latestLiveMap?(
@@ -3440,663 +3456,6 @@ function ProspectingTracker({data,setData}){
   );
 }
 
-// ═══════════════════════════════════════════
-// InsideProsper — Transcript Storage
-// ═══════════════════════════════════════════
-// ═══════════════════════════════════════════
-// SPOTLIGHT PIPELINE — Track spotlight progress through stages
-// ═══════════════════════════════════════════
-const SPOTLIGHT_STAGES=[
-  {key:'booked',label:'Booked Spotlight',color:'#6366f1',bg:'bg-indigo-100 text-indigo-700',desc:'First call appointment booked'},
-  {key:'first_call_done',label:'First Call Done',color:'#0891b2',bg:'bg-cyan-100 text-cyan-700',desc:'First spotlight call complete'},
-  {key:'written',label:'Written for Second Call',color:'#d97706',bg:'bg-amber-100 text-amber-700',desc:'Spotlight written, ready for review call'},
-  {key:'finished',label:'Finished & Checked',color:'#7c3aed',bg:'bg-purple-100 text-purple-700',desc:'Changes made, ready to publish'},
-  {key:'published',label:'Published',color:'#059669',bg:'bg-green-100 text-green-700',desc:'Live on the site and Facebook post'},
-  {key:'submitted_gsc',label:'Submitted to GSC',color:'#0d9488',bg:'bg-teal-100 text-teal-700',desc:'Submitted to Google Search Console'},
-  {key:'indexed',label:'Indexed on Google',color:'#16a34a',bg:'bg-emerald-100 text-emerald-800',desc:'Confirmed indexed in Google Search'}
-];
-
-function SpotlightPipeline({data,setData}){
-  const spotlights=data.spotlights||[];
-  const [showAdd,setShowAdd]=useState(false);
-  const [editId,setEditId]=useState(null);
-  const [search,setSearch]=useState('');
-  const [form,setForm]=useState({name:'',business:'',stage:'booked',bookedDate:today(),firstCallDate:'',secondCallDate:'',publishedUrl:'',notes:''});
-  const [showCalendlySetup,setShowCalendlySetup]=useState(false);
-  const [calendlyToken,setCalendlyToken]=useState('');
-  const [calendlyStatus,setCalendlyStatus]=useState('');
-  const [calendlyBusy,setCalendlyBusy]=useState(false);
-  const [eventTypes,setEventTypes]=useState([]);
-  const [selectedEventTypes,setSelectedEventTypes]=useState([]);
-
-  const calendlyConfig=data.calendlyConfig||{};
-  const isCalendlyConnected=!!(calendlyConfig.connected&&calendlyConfig.webhookUri);
-
-  const connectCalendly=async()=>{
-    if(!calendlyToken.trim()){setCalendlyStatus('Please paste your Calendly token.');return}
-    setCalendlyBusy(true);setCalendlyStatus('Connecting...');
-    try{
-      // First, list event types so user can pick which ones trigger spotlights
-      const etResp=await fetch('/.netlify/functions/calendly-setup',{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({action:'list_event_types',token:calendlyToken.trim()})
-      });
-      const etData=await etResp.json();
-      if(!etData.ok){setCalendlyStatus('Error: '+(etData.error||'Failed to fetch event types'));setCalendlyBusy(false);return}
-      setEventTypes(etData.eventTypes||[]);
-      // Auto-select event types whose name contains "spotlight"
-      const auto=(etData.eventTypes||[]).filter(et=>/spotlight/i.test(et.name)).map(et=>et.name);
-      setSelectedEventTypes(auto.length>0?auto:(etData.eventTypes||[]).map(et=>et.name));
-      setCalendlyStatus('Pick which event types should create spotlights, then click Confirm.');
-    }catch(e){setCalendlyStatus('Error: '+e.message)}
-    setCalendlyBusy(false);
-  };
-
-  const confirmCalendly=async()=>{
-    setCalendlyBusy(true);setCalendlyStatus('Registering webhook with Calendly...');
-    try{
-      const resp=await fetch('/.netlify/functions/calendly-setup',{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({action:'connect',token:calendlyToken.trim()})
-      });
-      const result=await resp.json();
-      if(!result.ok){
-        let msg='Error: '+(result.error||'Failed to register webhook');
-        if(result.details)msg+=' — '+(typeof result.details==='string'?result.details:JSON.stringify(result.details));
-        setCalendlyStatus(msg);setCalendlyBusy(false);return
-      }
-
-      setData(prev=>{
-        const nd={...prev,calendlyConfig:{
-          connected:true,
-          token:calendlyToken.trim(),
-          webhookUri:result.webhookUri,
-          signingKey:result.signingKey,
-          userUri:result.userUri,
-          orgUri:result.orgUri,
-          userName:result.userName||'',
-          allowedEventTypeNames:selectedEventTypes,
-          connectedAt:new Date().toISOString()
-        }};
-        saveData(nd);
-        return nd;
-      });
-      setCalendlyStatus('✓ Connected! New bookings will now appear automatically.');
-      setShowCalendlySetup(false);
-      setCalendlyToken('');setEventTypes([]);setSelectedEventTypes([]);
-    }catch(e){setCalendlyStatus('Error: '+e.message)}
-    setCalendlyBusy(false);
-  };
-
-  const disconnectCalendly=async()=>{
-    if(!confirm('Disconnect Calendly? New bookings will stop creating spotlights automatically.'))return;
-    setCalendlyBusy(true);setCalendlyStatus('Disconnecting...');
-    try{
-      await fetch('/.netlify/functions/calendly-setup',{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({action:'disconnect',token:calendlyConfig.token,webhookUri:calendlyConfig.webhookUri})
-      });
-      setData(prev=>{
-        const nd={...prev,calendlyConfig:{connected:false}};
-        saveData(nd);
-        return nd;
-      });
-      setCalendlyStatus('Disconnected.');
-    }catch(e){setCalendlyStatus('Error: '+e.message)}
-    setCalendlyBusy(false);
-  };
-
-  const toggleEventType=(name)=>{
-    setSelectedEventTypes(prev=>prev.includes(name)?prev.filter(n=>n!==name):[...prev,name]);
-  };
-
-  const resetForm=()=>setForm({name:'',business:'',stage:'booked',bookedDate:today(),firstCallDate:'',secondCallDate:'',publishedUrl:'',notes:''});
-
-  const saveSpotlight=()=>{
-    if(!form.name.trim()&&!form.business.trim())return;
-    setData(prev=>{
-      let sp=[...(prev.spotlights||[])];
-      if(editId){
-        const old=sp.find(s=>s.id===editId);
-        const stageChanged=old&&old.stage!==form.stage;
-        sp=sp.map(s=>s.id===editId?{...s,...form,updatedAt:new Date().toISOString(),history:[...(s.history||[]),...(stageChanged?[{stage:form.stage,date:new Date().toISOString(),note:'Stage changed to '+SPOTLIGHT_STAGES.find(st=>st.key===form.stage)?.label}]:[])]}:s);
-      }else{
-        sp.push({id:uid(),...form,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),history:[{stage:form.stage,date:new Date().toISOString(),note:'Spotlight created'}]});
-      }
-      const nd={...prev,spotlights:sp};
-      saveData(nd);
-      return nd;
-    });
-    setShowAdd(false);setEditId(null);resetForm();
-  };
-
-  const deleteSpotlight=(id)=>{
-    if(!confirm('Delete this spotlight?'))return;
-    setData(prev=>{const nd={...prev,spotlights:(prev.spotlights||[]).filter(s=>s.id!==id)};saveData(nd);return nd});
-  };
-
-  const updateStage=(id,newStage)=>{
-    setData(prev=>{
-      const sp=(prev.spotlights||[]).map(s=>{
-        if(s.id!==id)return s;
-        const hist=[...(s.history||[]),{stage:newStage,date:new Date().toISOString(),note:'Stage changed to '+SPOTLIGHT_STAGES.find(st=>st.key===newStage)?.label}];
-        return{...s,stage:newStage,updatedAt:new Date().toISOString(),history:hist};
-      });
-      const nd={...prev,spotlights:sp};
-      saveData(nd);
-      return nd;
-    });
-  };
-
-  const startEdit=(s)=>{
-    setForm({
-      name:s.name||'',business:s.business||'',stage:s.stage||'booked',
-      bookedDate:s.bookedDate||today(),firstCallDate:s.firstCallDate||'',
-      secondCallDate:s.secondCallDate||'',publishedUrl:s.publishedUrl||'',notes:s.notes||''
-    });
-    setEditId(s.id);setShowAdd(true);
-  };
-
-  const getStageInfo=(key)=>SPOTLIGHT_STAGES.find(s=>s.key===key)||SPOTLIGHT_STAGES[0];
-
-  // Drag-and-drop state
-  const [draggedId,setDraggedId]=useState(null);
-  const [dragOverStage,setDragOverStage]=useState(null);
-
-  const handleDragStart=(e,id)=>{
-    setDraggedId(id);
-    e.dataTransfer.effectAllowed='move';
-    try{e.dataTransfer.setData('text/plain',id)}catch(err){}
-  };
-  const handleDragOver=(e,stageKey)=>{
-    e.preventDefault();
-    e.dataTransfer.dropEffect='move';
-    if(dragOverStage!==stageKey)setDragOverStage(stageKey);
-  };
-  const handleDragLeave=()=>setDragOverStage(null);
-  const handleDrop=(e,stageKey)=>{
-    e.preventDefault();
-    const id=draggedId||e.dataTransfer.getData('text/plain');
-    if(id){
-      const sp=spotlights.find(s=>s.id===id);
-      if(sp&&sp.stage!==stageKey)updateStage(id,stageKey);
-    }
-    setDraggedId(null);setDragOverStage(null);
-  };
-
-  const matchesSearch=(s)=>{
-    if(!search.trim())return true;
-    const q=search.toLowerCase();
-    return (s.name||'').toLowerCase().includes(q)||(s.business||'').toLowerCase().includes(q)||(s.notes||'').toLowerCase().includes(q);
-  };
-
-  // Group spotlights by stage
-  const stageColumns=SPOTLIGHT_STAGES.map(stage=>({
-    ...stage,
-    items:spotlights.filter(s=>s.stage===stage.key&&matchesSearch(s))
-                    .sort((a,b)=>(b.updatedAt||'').localeCompare(a.updatedAt||''))
-  }));
-
-  return(
-    <div className="space-y-4 font-manrope">
-      {/* Calendly Connection Bar */}
-      <div className="stitch-glass-card rounded-[20px] p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${isCalendlyConnected?'bg-green-500':'bg-gray-300'}`}></span>
-          <span className="text-sm font-medium">
-            {isCalendlyConnected
-              ?<>Calendly connected{calendlyConfig.userName?` • ${calendlyConfig.userName}`:''}{calendlyConfig.allowedEventTypeNames?.length>0?<span className="text-xs text-muted-stone"> • Watching {calendlyConfig.allowedEventTypeNames.length} event type{calendlyConfig.allowedEventTypeNames.length!==1?'s':''}</span>:''}</>
-              :'Calendly not connected'}
-          </span>
-        </div>
-        <div className="flex gap-2">
-          {isCalendlyConnected
-            ?<>
-              <button onClick={()=>{setCalendlyToken(calendlyConfig.token||'');setSelectedEventTypes(calendlyConfig.allowedEventTypeNames||[]);setShowCalendlySetup(true);setCalendlyStatus('')}}
-                className="touch-target px-3 py-1.5 bg-black/5 hover:bg-black/10 rounded-full text-xs">Settings</button>
-              <button onClick={disconnectCalendly} disabled={calendlyBusy}
-                className="touch-target px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 rounded-full text-xs">Disconnect</button>
-            </>
-            :<button onClick={()=>{setShowCalendlySetup(true);setCalendlyStatus('')}}
-                className="touch-target px-3 py-1.5 bg-brand text-white hover:bg-brand-hover rounded-full text-xs shadow-lg shadow-brand/20">Connect Calendly</button>
-          }
-        </div>
-      </div>
-
-      {/* Calendly Setup Modal */}
-      {showCalendlySetup&&(
-        <div className="stitch-glass-card rounded-[24px] p-5 border-2 border-brand">
-          <h3 className="font-bold text-lg mb-2 text-brand-dark">Connect Calendly</h3>
-          <p className="text-xs text-deep-obsidian/60 mb-4">When someone books, a card will auto-appear in the "Booked Spotlight" column with their name, business, email, and meeting time.</p>
-
-          <div className="mb-3 bg-black/[0.03] rounded-xl p-3 text-xs space-y-1.5">
-            <p className="font-semibold text-deep-obsidian/70">How to get your Calendly token:</p>
-            <ol className="list-decimal list-inside text-deep-obsidian/60 space-y-0.5">
-              <li>Go to <a href="https://calendly.com/integrations/api_webhooks" target="_blank" rel="noopener" className="text-brand hover:underline">calendly.com/integrations/api_webhooks</a></li>
-              <li>Click "Personal Access Tokens" → "Create New Token"</li>
-              <li>Give it a name (e.g., "KailenFlow") → click Create</li>
-              <li>Copy the long string that appears and paste it below</li>
-            </ol>
-          </div>
-
-          <div className="mb-3">
-            <label className="text-xs font-medium text-deep-obsidian/70">Calendly Personal Access Token</label>
-            <input type="password" value={calendlyToken} onChange={e=>setCalendlyToken(e.target.value)}
-              placeholder="eyJraWQiOi..." className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl font-mono text-xs focus:ring-1 focus:ring-brand focus:outline-none"/>
-          </div>
-
-          {eventTypes.length===0&&(
-            <button onClick={connectCalendly} disabled={calendlyBusy||!calendlyToken.trim()}
-              className={`touch-target px-5 py-2.5 rounded-xl text-sm font-medium ${calendlyToken.trim()&&!calendlyBusy?'bg-brand text-white hover:bg-brand-hover shadow-lg shadow-brand/20':'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
-              {calendlyBusy?'Working...':'Continue'}
-            </button>
-          )}
-
-          {eventTypes.length>0&&(
-            <div className="space-y-3">
-              <div>
-                <label className="text-xs font-medium text-deep-obsidian/70">Which event types should create spotlights?</label>
-                <p className="text-[10px] text-muted-stone mb-2">Bookings from any selected type will auto-create a card in the pipeline.</p>
-                <div className="space-y-1 max-h-60 overflow-y-auto border border-glass-border rounded-xl p-2 bg-white">
-                  {eventTypes.map(et=>(
-                    <label key={et.uri} className="flex items-center gap-2 px-2 py-1 hover:bg-black/5 rounded-lg cursor-pointer">
-                      <input type="checkbox" checked={selectedEventTypes.includes(et.name)} onChange={()=>toggleEventType(et.name)}/>
-                      <span className="text-sm font-medium">{et.name}</span>
-                      {et.duration&&<span className="text-xs text-muted-stone">({et.duration} min)</span>}
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <button onClick={confirmCalendly} disabled={calendlyBusy||selectedEventTypes.length===0}
-                className={`touch-target px-5 py-2.5 rounded-xl text-sm font-medium ${selectedEventTypes.length>0&&!calendlyBusy?'bg-brand text-white hover:bg-brand-hover shadow-lg shadow-brand/20':'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
-                {calendlyBusy?'Working...':'Confirm & Register Webhook'}
-              </button>
-            </div>
-          )}
-
-          <button onClick={()=>{setShowCalendlySetup(false);setCalendlyStatus('');setEventTypes([]);setCalendlyToken('')}}
-            className="touch-target ml-2 px-5 py-2.5 bg-black/5 text-deep-obsidian/70 rounded-xl text-sm hover:bg-black/10">
-            Cancel
-          </button>
-
-          {calendlyStatus&&<p className={`mt-3 text-xs ${calendlyStatus.startsWith('Error')?'text-red-600':calendlyStatus.startsWith('✓')?'text-green-600':'text-deep-obsidian/60'}`}>{calendlyStatus}</p>}
-        </div>
-      )}
-
-      {/* Search + Add */}
-      <div className="flex flex-col sm:flex-row gap-2">
-        <input value={search} onChange={e=>setSearch(e.target.value)}
-          placeholder="Search by name, business, or notes..."
-          className="touch-target flex-1 px-4 py-2.5 border border-glass-border rounded-xl bg-white shadow-sm focus:ring-1 focus:ring-brand focus:outline-none"/>
-        <button onClick={()=>{resetForm();setEditId(null);setShowAdd(true)}}
-          className="touch-target px-5 py-2.5 bg-brand text-white rounded-xl text-sm font-medium hover:bg-brand-hover whitespace-nowrap shadow-lg shadow-brand/20">
-          + Add Spotlight
-        </button>
-      </div>
-
-      {/* Add/Edit Form */}
-      {showAdd&&(
-        <div className="stitch-glass-card rounded-[24px] p-5 border-2 border-brand">
-          <h3 className="font-bold text-lg mb-4 text-brand-dark">{editId?'Edit Spotlight':'Add New Spotlight'}</h3>
-          <div className="grid sm:grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-medium text-deep-obsidian/70">Contact Name</label>
-              <input value={form.name} onChange={e=>setForm(p=>({...p,name:e.target.value}))}
-                placeholder="Their name" className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-deep-obsidian/70">Business Name</label>
-              <input value={form.business} onChange={e=>setForm(p=>({...p,business:e.target.value}))}
-                placeholder="Their business" className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-deep-obsidian/70">Stage</label>
-              <select value={form.stage} onChange={e=>setForm(p=>({...p,stage:e.target.value}))}
-                className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl bg-white focus:ring-1 focus:ring-brand focus:outline-none">
-                {SPOTLIGHT_STAGES.map(s=><option key={s.key} value={s.key}>{s.label}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-deep-obsidian/70">Booked Date</label>
-              <input type="date" value={form.bookedDate} onChange={e=>setForm(p=>({...p,bookedDate:e.target.value}))}
-                className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-deep-obsidian/70">First Call Date</label>
-              <input type="date" value={form.firstCallDate} onChange={e=>setForm(p=>({...p,firstCallDate:e.target.value}))}
-                className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/>
-            </div>
-            <div>
-              <label className="text-xs font-medium text-deep-obsidian/70">Second Call Date</label>
-              <input type="date" value={form.secondCallDate} onChange={e=>setForm(p=>({...p,secondCallDate:e.target.value}))}
-                className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/>
-            </div>
-            <div className="sm:col-span-2">
-              <label className="text-xs font-medium text-deep-obsidian/70">Published URL (when live)</label>
-              <input value={form.publishedUrl} onChange={e=>setForm(p=>({...p,publishedUrl:e.target.value}))}
-                placeholder="https://..." className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/>
-            </div>
-            <div className="sm:col-span-2">
-              <label className="text-xs font-medium text-deep-obsidian/70">Notes</label>
-              <textarea value={form.notes} onChange={e=>setForm(p=>({...p,notes:e.target.value}))}
-                rows="3" placeholder="Any notes about this spotlight..."
-                className="w-full mt-1 px-3 py-2 border border-glass-border rounded-xl text-sm focus:ring-1 focus:ring-brand focus:outline-none"/>
-            </div>
-          </div>
-          <div className="flex gap-2 mt-4">
-            <button onClick={saveSpotlight} disabled={!form.name.trim()&&!form.business.trim()}
-              className={`touch-target px-5 py-2.5 rounded-xl text-sm font-medium ${form.name.trim()||form.business.trim()?'bg-brand text-white hover:bg-brand-hover shadow-lg shadow-brand/20':'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
-              {editId?'Save Changes':'Add Spotlight'}
-            </button>
-            <button onClick={()=>{setShowAdd(false);setEditId(null);resetForm()}}
-              className="touch-target px-5 py-2.5 bg-black/5 text-deep-obsidian/70 rounded-xl text-sm hover:bg-black/10">
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Empty state */}
-      {spotlights.length===0&&!showAdd&&(
-        <div className="stitch-glass-card rounded-[24px] p-12 text-center">
-          <span className="material-symbols-outlined text-4xl text-brand mb-3">stars</span>
-          <p className="text-deep-obsidian/70 mb-1">No spotlights yet</p>
-          <p className="text-sm text-muted-stone">Add your first spotlight to start tracking through the pipeline.</p>
-        </div>
-      )}
-
-      {/* KANBAN BOARD — drag cards left to right through stages */}
-      {spotlights.length>0&&(
-        <div className="-mx-4 px-4 sm:mx-0 sm:px-0 overflow-x-auto pb-4">
-          <div className="flex gap-2 min-w-max">
-            {stageColumns.map((col,idx)=>(
-              <div key={col.key}
-                onDragOver={e=>handleDragOver(e,col.key)}
-                onDragLeave={handleDragLeave}
-                onDrop={e=>handleDrop(e,col.key)}
-                className={`flex-shrink-0 w-52 rounded-[20px] transition-colors ${dragOverStage===col.key?'bg-brand/10 ring-2 ring-brand':'bg-black/[0.03]'}`}>
-                <div className="px-2 py-2 rounded-t-[20px] border-b" style={{borderColor:col.color+'40',backgroundColor:col.color+'15'}}>
-                  <div className="flex items-center justify-between gap-1">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="text-[9px] font-bold px-1 py-0.5 rounded-full text-white flex-shrink-0" style={{backgroundColor:col.color}}>{idx+1}</span>
-                      <h4 className="font-semibold text-xs truncate" style={{color:col.color}}>{col.label}</h4>
-                    </div>
-                    <span className="text-[10px] font-bold text-deep-obsidian/60 bg-white px-1.5 py-0.5 rounded-full flex-shrink-0">{col.items.length}</span>
-                  </div>
-                </div>
-                <div className="p-1.5 space-y-1.5 min-h-[120px]">
-                  {col.items.length===0&&(
-                    <div className="text-center text-[10px] text-muted-stone py-4 border border-dashed border-glass-border rounded-xl">
-                      Drop here
-                    </div>
-                  )}
-                  {col.items.map(s=>{
-                    const primary=s.business||s.name||'Untitled';
-                    const secondary=s.business&&s.name?s.name:'';
-                    return(
-                      <div key={s.id}
-                        draggable
-                        onDragStart={e=>handleDragStart(e,s.id)}
-                        onDragEnd={()=>{setDraggedId(null);setDragOverStage(null)}}
-                        className={`stitch-glass-card !bg-white rounded-xl p-2 cursor-grab active:cursor-grabbing hover:shadow-md transition-all ${draggedId===s.id?'opacity-40':''}`}>
-                        <div className="flex items-start justify-between gap-1">
-                          <div className="flex-1 min-w-0">
-                            <h5 className="font-bold text-sm text-brand-dark truncate leading-tight">{primary}</h5>
-                            {secondary&&<p className="text-[10px] text-muted-stone truncate mt-0.5">{secondary}</p>}
-                          </div>
-                          <div className="flex gap-0 flex-shrink-0" onMouseDown={e=>e.stopPropagation()}>
-                            <button onClick={()=>startEdit(s)} className="w-5 h-5 flex items-center justify-center rounded hover:bg-black/5 text-[10px]" title="Edit">✏</button>
-                            <button onClick={()=>deleteSpotlight(s.id)} className="w-5 h-5 flex items-center justify-center rounded hover:bg-red-50 text-[10px] text-red-500" title="Delete">✕</button>
-                          </div>
-                        </div>
-                        <div className="space-y-0.5 mt-1 text-[10px] text-muted-stone">
-                          {s.bookedDate&&<div className="truncate">📅 {fmt(s.bookedDate)}</div>}
-                          {s.firstCallDate&&<div className="truncate">📞 1st: {fmt(s.firstCallDate)}</div>}
-                          {s.secondCallDate&&<div className="truncate">📞 2nd: {fmt(s.secondCallDate)}</div>}
-                          {s.publishedUrl&&<a href={s.publishedUrl} target="_blank" rel="noopener" onClick={e=>e.stopPropagation()} className="block text-brand hover:underline truncate">🔗 View</a>}
-                        </div>
-                        {s.notes&&<p className="text-[10px] text-deep-obsidian/60 mt-1 line-clamp-2 whitespace-pre-wrap">{s.notes}</p>}
-                        <div className="mt-1.5 pt-1.5 border-t border-glass-border sm:hidden">
-                          <select value={s.stage} onChange={e=>updateStage(s.id,e.target.value)}
-                            className="w-full text-[10px] px-1.5 py-1 border border-glass-border rounded-lg bg-white">
-                            {SPOTLIGHT_STAGES.map(st=><option key={st.key} value={st.key}>Move to: {st.label}</option>)}
-                          </select>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function InsideProsperView({data,setData}){
-  const [activeSection,setActiveSection]=useState('spotlights');
-  const transcripts=data.transcripts||[];
-  const spotlights=data.spotlights||[];
-  const [search,setSearch]=useState('');
-  const [selectedId,setSelectedId]=useState(null);
-  const [editing,setEditing]=useState(false);
-  const [form,setForm]=useState({title:'',source:'',date:today(),tags:'',content:''});
-
-  const filtered=transcripts.filter(t=>{
-    if(!search.trim())return true;
-    const q=search.toLowerCase();
-    return (t.title||'').toLowerCase().includes(q)||(t.source||'').toLowerCase().includes(q)||(t.tags||'').toLowerCase().includes(q)||(t.content||'').toLowerCase().includes(q);
-  }).sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-
-  const selected=transcripts.find(t=>t.id===selectedId);
-
-  const resetForm=()=>setForm({title:'',source:'',date:today(),tags:'',content:''});
-
-  const saveTranscript=()=>{
-    if(!form.title.trim()||!form.content.trim())return;
-    setData(prev=>{
-      let ts=[...(prev.transcripts||[])];
-      if(editing&&selectedId){
-        ts=ts.map(t=>t.id===selectedId?{...t,...form,updatedAt:new Date().toISOString()}:t);
-      }else{
-        ts.push({id:uid(),createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),...form});
-      }
-      const nd={...prev,transcripts:ts};saveData(nd);return nd;
-    });
-    if(!editing){
-      // Select the newly added one
-      setTimeout(()=>{
-        const latest=(data.transcripts||[]).concat([{id:'temp'}]);
-        setSelectedId(null);
-      },50);
-    }
-    setEditing(false);setSelectedId(null);resetForm();
-  };
-
-  const deleteTranscript=(id)=>{
-    if(!confirm('Delete this transcript?'))return;
-    setData(prev=>{const nd={...prev,transcripts:(prev.transcripts||[]).filter(t=>t.id!==id)};saveData(nd);return nd});
-    if(selectedId===id){setSelectedId(null);setEditing(false);resetForm()}
-  };
-
-  const startEdit=(t)=>{
-    setForm({title:t.title||'',source:t.source||'',date:t.date||today(),tags:t.tags||'',content:t.content||''});
-    setSelectedId(t.id);setEditing(true);
-  };
-
-  const viewTranscript=(t)=>{
-    setSelectedId(t.id);setEditing(false);
-    setForm({title:t.title||'',source:t.source||'',date:t.date||today(),tags:t.tags||'',content:t.content||''});
-  };
-
-  const wordCount=(text)=>{if(!text)return 0;return text.trim().split(/\s+/).filter(Boolean).length};
-
-  // If viewing/editing a transcript
-  if(selectedId&&!editing){
-    const t=selected;
-    if(!t){setSelectedId(null);return null}
-    return(
-      <div className="fade-in font-manrope">
-        <button onClick={()=>{setSelectedId(null);resetForm()}} className="touch-target flex items-center gap-1 text-sm text-brand hover:text-brand-hover mb-4">
-          <span>←</span> Back to all transcripts
-        </button>
-        <div className="stitch-glass-card rounded-[24px] p-6">
-          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 mb-4">
-            <div>
-              <h3 className="text-xl font-bold text-brand-dark">{t.title}</h3>
-              <div className="flex flex-wrap gap-3 mt-1 text-sm text-muted-stone">
-                {t.source&&<span>Source: {t.source}</span>}
-                <span>{fmt(t.date)}</span>
-                <span>{wordCount(t.content).toLocaleString()} words</span>
-              </div>
-              {t.tags&&<div className="flex flex-wrap gap-1.5 mt-2">{t.tags.split(',').map((tag,i)=><span key={i} className="px-2 py-0.5 bg-brand/10 text-brand text-xs rounded-full font-medium">{tag.trim()}</span>)}</div>}
-            </div>
-            <div className="flex gap-2 flex-shrink-0">
-              <button onClick={()=>startEdit(t)} className="touch-target px-4 py-2 bg-brand text-white rounded-xl text-sm hover:bg-brand-hover shadow-lg shadow-brand/20">Edit</button>
-              <button onClick={()=>deleteTranscript(t.id)} className="touch-target px-4 py-2 bg-red-100 text-red-700 rounded-xl text-sm hover:bg-red-200">Delete</button>
-              <button onClick={()=>{navigator.clipboard.writeText(t.content)}} className="touch-target px-4 py-2 bg-black/5 text-deep-obsidian/70 rounded-xl text-sm hover:bg-black/10">Copy</button>
-              <button onClick={()=>{
-                const w=window.open('','_blank','width=800,height=600');
-                w.document.write('<html><head><title>'+t.title+'</title><style>body{font-family:Arial,sans-serif;max-width:700px;margin:40px auto;padding:0 20px;color:#1a1a1a;line-height:1.7}h1{font-size:22px;margin-bottom:4px}p.meta{color:#6b7280;font-size:13px;margin-bottom:24px;border-bottom:1px solid #e5e7eb;padding-bottom:16px}.content{font-size:14px;white-space:pre-wrap}@media print{body{margin:20px}}</style></head><body>');
-                w.document.write('<h1>'+t.title+'</h1>');
-                w.document.write('<p class="meta">'+(t.source?'Source: '+t.source+' &nbsp;|&nbsp; ':'')+fmt(t.date)+' &nbsp;|&nbsp; '+wordCount(t.content).toLocaleString()+' words'+(t.tags?' &nbsp;|&nbsp; Tags: '+t.tags:'')+'</p>');
-                w.document.write('<div class="content">'+t.content.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')+'</div>');
-                w.document.write('</body></html>');
-                w.document.close();
-                setTimeout(()=>{w.print()},300);
-              }} className="touch-target px-4 py-2 bg-black/5 text-deep-obsidian/70 rounded-xl text-sm hover:bg-black/10">PDF</button>
-            </div>
-          </div>
-          <div className="border-t border-glass-border pt-4 mt-4">
-            <pre className="whitespace-pre-wrap text-sm text-deep-obsidian/80 leading-relaxed font-sans max-h-[70vh] overflow-y-auto">{t.content}</pre>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Add/edit form
-  if(editing){
-    return(
-      <div className="fade-in font-manrope">
-        <button onClick={()=>{setEditing(false);if(!selectedId)resetForm();else{setSelectedId(selectedId)}}} className="touch-target flex items-center gap-1 text-sm text-brand hover:text-brand-hover mb-4">
-          <span>←</span> Cancel
-        </button>
-        <div className="stitch-glass-card rounded-[24px] p-6">
-          <h3 className="text-lg font-bold text-brand-dark mb-4">{selectedId?'Edit Transcript':'Add New Transcript'}</h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-            <div>
-              <label className="text-sm font-medium text-deep-obsidian/70">Title *</label>
-              <input value={form.title} onChange={e=>setForm(p=>({...p,title:e.target.value}))} className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none" placeholder="e.g. Interview with John Smith - Plumbing Business"/>
-            </div>
-            <div>
-              <label className="text-sm font-medium text-deep-obsidian/70">Source</label>
-              <input value={form.source} onChange={e=>setForm(p=>({...p,source:e.target.value}))} className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none" placeholder="e.g. Zoom call, Phone, In-person"/>
-            </div>
-            <div>
-              <label className="text-sm font-medium text-deep-obsidian/70">Date</label>
-              <input type="date" value={form.date} onChange={e=>setForm(p=>({...p,date:e.target.value}))} className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/>
-            </div>
-            <div>
-              <label className="text-sm font-medium text-deep-obsidian/70">Tags (comma separated)</label>
-              <input value={form.tags} onChange={e=>setForm(p=>({...p,tags:e.target.value}))} className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none" placeholder="e.g. client name, topic, industry"/>
-            </div>
-          </div>
-          <div className="mb-4">
-            <label className="text-sm font-medium text-deep-obsidian/70">Transcript Content *</label>
-            <textarea value={form.content} onChange={e=>setForm(p=>({...p,content:e.target.value}))} rows="18"
-              className="w-full mt-1 px-3 py-2 border border-glass-border rounded-xl text-sm font-mono leading-relaxed resize-y focus:ring-1 focus:ring-brand focus:outline-none" placeholder="Paste or type the full transcript here..."/>
-            {form.content&&<p className="text-xs text-muted-stone mt-1">{wordCount(form.content).toLocaleString()} words</p>}
-          </div>
-          <div className="flex gap-2">
-            <button onClick={saveTranscript} disabled={!form.title.trim()||!form.content.trim()}
-              className={`touch-target px-6 py-2.5 rounded-xl text-sm font-medium ${form.title.trim()&&form.content.trim()?'bg-brand text-white hover:bg-brand-hover shadow-lg shadow-brand/20':'bg-gray-200 text-gray-400 cursor-not-allowed'}`}>
-              {selectedId?'Save Changes':'Add Transcript'}
-            </button>
-            <button onClick={()=>{setEditing(false);setSelectedId(null);resetForm()}} className="touch-target px-6 py-2.5 bg-black/5 text-deep-obsidian/70 rounded-xl text-sm hover:bg-black/10">Cancel</button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // Main list view with tabs for Spotlights / Transcripts
-  return(
-    <div className="fade-in font-manrope">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-        <div>
-          <h2 className="text-2xl font-bold text-brand-dark">InsideProsper</h2>
-          <p className="text-sm text-muted-stone">{activeSection==='spotlights'?`Spotlight pipeline - ${spotlights.length} spotlight${spotlights.length!==1?'s':''}`:`Interview transcripts - ${transcripts.length} transcript${transcripts.length!==1?'s':''}`}</p>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={()=>setActiveSection('spotlights')}
-            className={`touch-target px-4 py-2 rounded-full text-sm font-medium transition-all ${activeSection==='spotlights'?'bg-brand text-white shadow-lg shadow-brand/20':'stitch-glass-card text-deep-obsidian/70 hover:bg-black/5'}`}>
-            ⭐ Spotlight Pipeline
-          </button>
-          <button onClick={()=>setActiveSection('transcripts')}
-            className={`touch-target px-4 py-2 rounded-full text-sm font-medium transition-all ${activeSection==='transcripts'?'bg-brand text-white shadow-lg shadow-brand/20':'stitch-glass-card text-deep-obsidian/70 hover:bg-black/5'}`}>
-            📝 Transcripts
-          </button>
-        </div>
-      </div>
-
-      {activeSection==='spotlights'&&<SpotlightPipeline data={data} setData={setData}/>}
-
-      {activeSection==='transcripts'&&(
-        <>
-          <div className="flex justify-end mb-4">
-            <button onClick={()=>{resetForm();setSelectedId(null);setEditing(true)}} className="touch-target px-5 py-2.5 bg-brand text-white rounded-xl text-sm font-medium hover:bg-brand-hover shadow-lg shadow-brand/20">
-              + Add Transcript
-            </button>
-          </div>
-
-          {/* Search */}
-          <div className="mb-4">
-            <input value={search} onChange={e=>setSearch(e.target.value)} className="touch-target w-full px-4 py-2.5 border border-glass-border rounded-xl bg-white shadow-sm focus:ring-1 focus:ring-brand focus:outline-none" placeholder="Search transcripts by title, source, tags, or content..."/>
-          </div>
-
-          {filtered.length===0&&transcripts.length===0&&(
-            <div className="stitch-glass-card rounded-[24px] p-12 text-center">
-              <span className="material-symbols-outlined text-4xl text-brand mb-3">description</span>
-              <p className="text-deep-obsidian/70 mb-1">No transcripts yet</p>
-              <p className="text-sm text-muted-stone">Add your first interview transcript to get started.</p>
-            </div>
-          )}
-
-          {filtered.length===0&&transcripts.length>0&&(
-            <div className="stitch-glass-card rounded-[24px] p-8 text-center text-muted-stone">No transcripts match your search.</div>
-          )}
-
-          {/* Transcript cards */}
-          <div className="space-y-3">
-            {filtered.map(t=>(
-              <div key={t.id} onClick={()=>viewTranscript(t)} className="stitch-glass-card stitch-hover-lift rounded-[20px] p-4 cursor-pointer">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-semibold text-brand-dark truncate">{t.title}</h4>
-                    <div className="flex flex-wrap gap-3 text-xs text-muted-stone mt-1">
-                      {t.source&&<span>{t.source}</span>}
-                      <span>{fmt(t.date)}</span>
-                      <span>{wordCount(t.content).toLocaleString()} words</span>
-                    </div>
-                    {t.tags&&<div className="flex flex-wrap gap-1 mt-1.5">{t.tags.split(',').slice(0,5).map((tag,i)=><span key={i} className="px-2 py-0.5 bg-brand/10 text-brand text-[10px] rounded-full font-medium">{tag.trim()}</span>)}</div>}
-                  </div>
-                  <div className="flex gap-1.5 flex-shrink-0" onClick={e=>e.stopPropagation()}>
-                    <button onClick={()=>startEdit(t)} className="touch-target w-9 h-9 flex items-center justify-center rounded-xl bg-black/5 hover:bg-black/10 text-sm" title="Edit">✏</button>
-                    <button onClick={()=>deleteTranscript(t.id)} className="touch-target w-9 h-9 flex items-center justify-center rounded-xl bg-red-50 hover:bg-red-100 text-sm text-red-600" title="Delete">✕</button>
-                  </div>
-                </div>
-                {t.content&&<p className="text-sm text-muted-stone mt-2 line-clamp-2">{t.content.slice(0,200)}{t.content.length>200?'...':''}</p>}
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
 
 // ═══════════════════════════════════════════
 // Indexing Section Component — submits a URL to Google's Indexing API
@@ -8365,12 +7724,13 @@ function AnalyticsTab({client,setData,data}){
     if(!url.startsWith('http'))url='https://'+url;
 
     try{
-      const [mRes,dRes]=await Promise.all([
-        fetch(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=mobile`).then(r=>r.json()),
-        fetch(`https://www.googleapis.com/pagespeedonline/v5/runPagespeed?url=${encodeURIComponent(url)}&strategy=desktop`).then(r=>r.json())
-      ]);
+      const psiFetch=async(strategy)=>{
+        const r=await fetch('/api/pagespeed',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({url,strategy})});
+        return r.json();
+      };
+      const [mRes,dRes]=await Promise.all([psiFetch('mobile'),psiFetch('desktop')]);
 
-      if(mRes.error||dRes.error){setError((mRes.error?.message||dRes.error?.message)||'API error');setLoading(false);return}
+      if(mRes.error||dRes.error){setError((mRes.error||dRes.error)||'API error');setLoading(false);return}
 
       const extract=(r)=>{
         const lr=r.lighthouseResult;
@@ -8751,7 +8111,6 @@ function AuthenticatedApp(){
           {view==='eod'&&<EndOfDay data={data} setData={setData}/>}
           {view==='leadfinder'&&<LeadFinder data={data} setData={setData}/>}
           {view==='callcoach'&&<CallCoach data={data} setData={setData}/>}
-          {view==='transcripts'&&<InsideProsperView data={data} setData={setData}/>}
           {view==='scheduledpages'&&<ScheduledPages data={data} setData={setData}/>}
           {view==='indexing'&&<IndexingDashboard data={data} setData={setData}/>}
           {view==='dashboard'&&client&&(
