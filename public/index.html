@@ -592,6 +592,13 @@ function Modal({open,onClose,title,children,wide}){
 function Sidebar({clients,activeClient,setActiveClient,view,setView,onAddClient,data,setData,sidebarOpen,setSidebarOpen}){
   const [lastSaved,setLastSaved]=useState(localStorage.getItem(STORAGE_KEY+'_lastSaved'));
   const [copyMsg,setCopyMsg]=useState('');
+  // Click-to-expand "Clients" accordion — explicitly requested over the
+  // previous plain-list-at-top approach: one clearly-labeled button that
+  // drops the client list down, instead of relying on scroll position or
+  // remembering a header dropdown exists. Starts open so clients are still
+  // visible with zero taps; collapsing is there for anyone with a long
+  // client list who wants the nav links back within reach without scrolling.
+  const [clientsOpen,setClientsOpen]=useState(true);
   useEffect(()=>{const i=setInterval(()=>setLastSaved(localStorage.getItem(STORAGE_KEY+'_lastSaved')),5000);return()=>clearInterval(i)},[]);
   const handleSave=()=>{const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`kailenflow-backup-${today()}.json`;a.click()};
   const handleLoad=()=>{const input=document.createElement('input');input.type='file';input.accept='.json';input.onchange=e=>{const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=ev=>{try{const d=JSON.parse(ev.target.result);setData(d);saveData(d)}catch(err){alert('Invalid backup file')}};r.readAsText(f)};input.click()};
@@ -642,8 +649,11 @@ function Sidebar({clients,activeClient,setActiveClient,view,setView,onAddClient,
         the drawer opened. Clients now render first so they're the first
         thing visible, no scrolling required. */}
         <div className="flex-1 overflow-y-auto p-2">
-          <div className="px-3 pt-2 pb-1 text-[10px] font-semibold text-muted-stone uppercase tracking-widest">Clients</div>
-          {clients.map(c=>(
+          <button onClick={()=>setClientsOpen(o=>!o)} className="touch-target w-full flex items-center justify-between px-3 pt-2 pb-1 text-[10px] font-semibold text-muted-stone uppercase tracking-widest">
+            <span>Clients ({clients.length})</span>
+            <span className={`material-symbols-outlined text-[16px] transition-transform ${clientsOpen?'rotate-180':''}`}>expand_more</span>
+          </button>
+          {clientsOpen&&clients.map(c=>(
             <button key={c.id} onClick={()=>{setActiveClient(c.id);setView('dashboard');setSidebarOpen(false)}}
               className={`touch-target w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm mb-0.5 transition-all duration-200 ${activeClient===c.id&&view==='dashboard'?'bg-brand text-white shadow-md shadow-brand/20':'text-deep-obsidian/70 hover:bg-black/5 hover:translate-x-1'}`}>
               <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm flex-shrink-0 ${activeClient===c.id&&view==='dashboard'?'bg-white/20 text-white':'bg-brand/15 text-brand'}`}>{c.name.charAt(0)}</div>
