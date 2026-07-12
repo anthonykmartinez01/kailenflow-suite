@@ -4823,7 +4823,16 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
       const ne=map.latLngToContainerPoint(fullBounds.getNorthEast());
       spacingPx=Math.hypot(ne.x-nw.x,ne.y-nw.y)/(gridSize-1);
     }
-    const iconSize=Math.round(clamp(spacingPx*0.95,22,46));
+    // Floor lowered from 22 to 8 — a fixed minimum bigger than the actual
+    // available spacing was FORCING dots to overlap on any dense grid in a
+    // short container (e.g. the 260px-tall dashboard header preview with an
+    // 11x11+ grid): the real per-point gap there can legitimately be well
+    // under 22px, and clamping the icon to be bigger than its own gap
+    // guarantees neighboring dots pile on top of each other. Letting it
+    // shrink further (still never below 8px, so it stays visible) means the
+    // shown size always actually fits the space, on any container/grid
+    // combination — not just the ones this was tuned against.
+    const iconSize=Math.round(clamp(spacingPx*0.95,8,46));
     const heatRadius=clamp(spacingPx*0.55,12,45);
     const heatBlur=clamp(spacingPx*0.42,9,35);
 
@@ -4848,11 +4857,17 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
       // identical to a real gray "not found" result.
       const stuck=!!p.taskId&&!p.rank&&!p.resolved;
       const color=stuck?'#374151':heatRankColor(p.rank);
-      const label=stuck?'?':(p.rank?('#'+p.rank):'20+');
+      // Below ~16px there's no room to render a legible label anyway (a
+      // "20+" or "#12" crammed into a tiny circle is just noise) — show a
+      // plain colored dot instead. The color pattern still reads fine at a
+      // glance; cramped illegible text does not.
+      const showLabel=iconSize>=16;
+      const label=showLabel?(stuck?'?':(p.rank?('#'+p.rank):'20+')):'';
       const fontSize=Math.max(9,Math.round(iconSize*(label.length>2?0.3:0.38)));
+      const borderPx=iconSize<16?1:2;
       const icon=L.divIcon({
         className:'',
-        html:`<div style="width:${iconSize}px;height:${iconSize}px;border-radius:50%;background:${color};border:2px solid rgba(255,255,255,${stuck?0.4:0.85});box-shadow:0 0 ${Math.round(iconSize/3.5)}px ${color}99;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:${fontSize}px;font-family:system-ui;opacity:${stuck?0.55:1}">${label}</div>`,
+        html:`<div style="width:${iconSize}px;height:${iconSize}px;border-radius:50%;background:${color};border:${borderPx}px solid rgba(255,255,255,${stuck?0.4:0.85});box-shadow:0 0 ${Math.round(iconSize/3.5)}px ${color}99;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:700;font-size:${fontSize}px;font-family:system-ui;opacity:${stuck?0.55:1}">${label}</div>`,
         iconSize:[iconSize,iconSize],iconAnchor:[iconSize/2,iconSize/2],
       });
       L.marker([p.lat,p.lng],{icon}).addTo(map).bindPopup(stuck?'No result returned for this point':(p.rank?`Rank #${p.rank}`:'Not found in top 20'));
