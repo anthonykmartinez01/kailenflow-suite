@@ -1369,8 +1369,10 @@ function KeywordRow({client,setData,kw,snapshots,onMove,onRemove,expanded,onTogg
   const solvChange=(latestSolv!==null&&prevSolv!==null)?parseFloat((latestSolv-prevSolv).toFixed(1)):null;
   const rankChange=(latest?.avgRank&&prev?.avgRank)?parseFloat((prev.avgRank-latest.avgRank).toFixed(1)):null; // positive = rank improved (lower number)
 
+  // no overflow-hidden on the card below — it was clipping the absolutely-
+  // positioned 3-dot dropdown menu, making it look glitched/half-invisible
   return(
-    <div className="stitch-glass-card rounded-[18px] overflow-hidden" draggable onDragStart={e=>dragHandlers.onDragStart(e,kw.id)}>
+    <div className="stitch-glass-card rounded-[18px]" draggable onDragStart={e=>dragHandlers.onDragStart(e,kw.id)}>
       <div className="flex items-center gap-3 p-3 cursor-move">
         <MiniHeatDots grid={latest?.grid} size={36}/>
         <div className="flex-1 min-w-0 cursor-pointer" onClick={onToggleExpand}>
@@ -4741,7 +4743,13 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
     // viewport, which rendered as a solid navy fill (our own lighten
     // overlay showing through with no tiles loaded behind it) once
     // stretched across the whole screen.
-    const map=L.map(containerRef.current,{zoomControl:true});
+    // zoomAnimation/markerZoomAnimation off: with 100+ DOM marker icons
+    // (each with a blurred box-shadow) plus the full-container mix-blend-mode
+    // overlay below, Leaflet's animated zoom was repositioning/repainting
+    // all of that every frame of the transition, which is what read as
+    // stuttery. Snapping to the new zoom instantly is far smoother in
+    // practice than animating something this heavy.
+    const map=L.map(containerRef.current,{zoomControl:true,zoomAnimation:false,markerZoomAnimation:false,fadeAnimation:false});
     mapRef.current=map;
     L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{attribution:'© OpenStreetMap © CARTO',maxZoom:20,subdomains:'abcd'}).addTo(map);
 
@@ -4758,7 +4766,14 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
     // 1mi-radius grid and a wide 5mi one both used to render at the same
     // zoom, so the tight one always looked like a cramped, overlapping mess
     // no matter how the glow itself was tuned.
-    const bounds=L.latLngBounds(points.map(p=>[p.lat,p.lng]));
+    // Zoom to the TOP-3 ("green") points specifically, not the whole grid —
+    // those are the only points that actually matter (the visible 3-pack),
+    // so the map opens already zoomed as tight as possible on them instead
+    // of the old zoomed-way-out view of the entire search radius. Falls
+    // back to the full grid if nothing ranked top-3 anywhere.
+    const greenPoints=points.filter(p=>p.rank&&p.rank<=3);
+    const boundsPoints=greenPoints.length>0?greenPoints:points;
+    const bounds=L.latLngBounds(boundsPoints.map(p=>[p.lat,p.lng]));
     const refit=()=>{
       map.invalidateSize();
       // animate:false is required, not cosmetic — fitBounds' default
@@ -4766,7 +4781,7 @@ function LeafletHeatMap({points,centerLat,centerLng,businessName,address,keyword
       // after a resize (confirmed: the animated version gets stuck at the
       // pre-resize center/zoom, while the same call with animate:false
       // lands on the exact correct one every time).
-      if(points.length>1){map.fitBounds(bounds.pad(0.18),{maxZoom:17,animate:false})}else{map.setView([centerLat,centerLng],15,{animate:false})}
+      if(boundsPoints.length>1){map.fitBounds(bounds.pad(0.18),{maxZoom:17,animate:false})}else{map.setView([boundsPoints[0]?.lat??centerLat,boundsPoints[0]?.lng??centerLng],15,{animate:false})}
     };
     refit();
     // Leaflet reads the container's size at construction time — if this
