@@ -166,7 +166,20 @@ export default async (req: Request, _ctx: Context) => {
       // opened in the morning look like a drop.
       const end = new Date();
       end.setDate(end.getDate() - 1);
-      const start = new Date(end.getFullYear(), end.getMonth() - (months - 1), 1);
+      const monthsStart = new Date(end.getFullYear(), end.getMonth() - (months - 1), 1);
+
+      // Optional trailing-window mode, for the Dashboard cards — they all
+      // read "last 28 days", not "this calendar month", so a month bucket
+      // can't answer them. Same days/months split ghl-leads uses, and for
+      // the same reason: the two windows mean different things and one must
+      // not silently redefine the other.
+      const days = body.days == null ? null : Math.max(1, Math.min(540, Number(body.days) || 28));
+      const windowStart = days == null ? null : new Date(end.getFullYear(), end.getMonth(), end.getDate() - (days - 1));
+      // Whichever reaches further back wins, so a caller asking for both
+      // (e.g. months:1 + days:28 near the start of a month) still gets every
+      // day the window needs instead of a total silently truncated at the
+      // 1st. Fetching the union costs one request either way.
+      const start = windowStart && windowStart < monthsStart ? windowStart : monthsStart;
 
       // Impressions and call clicks come back in ONE request — the endpoint
       // is multi-metric by design, so splitting them into two calls would
@@ -201,6 +214,8 @@ export default async (req: Request, _ctx: Context) => {
       const breakdown: Record<string, number> = { search: 0, maps: 0, desktop: 0, mobile: 0 };
       let impressionTotal = 0;
       let callTotal = 0;
+      let windowImpressions = 0;
+      let windowCalls = 0;
 
       // Response shape: multiDailyMetricTimeSeries[] → dailyMetricTimeSeries[]
       // → {dailyMetric, timeSeries:{datedValues:[{date:{y,m,d}, value}]}}.
@@ -213,11 +228,19 @@ export default async (req: Request, _ctx: Context) => {
             const v = Number(dv.value ?? 0);
             if (!v || !dv.date) continue;
             const key = `${dv.date.year}-${pad(dv.date.month)}`;
+            // The fetched range can reach further back than the trailing
+            // window (see `start` above), so each day is tested rather than
+            // assumed to be inside it.
+            const inWindow = windowStart
+              ? new Date(dv.date.year, dv.date.month - 1, dv.date.day) >= windowStart
+              : false;
             if (isCalls) {
               if (key in callCounts) callCounts[key] += v;
               callTotal += v;
+              if (inWindow) windowCalls += v;
               continue;
             }
+            if (inWindow) windowImpressions += v;
             if (key in impressionCounts) impressionCounts[key] += v;
             impressionTotal += v;
             if (metric.includes("SEARCH")) breakdown.search += v;
@@ -250,6 +273,9 @@ export default async (req: Request, _ctx: Context) => {
         available: true,
         impressions: { ...summarize(impressionCounts, impressionTotal), breakdown },
         calls: summarize(callCounts, callTotal),
+        // Only present when `days` was asked for, so a caller that didn't
+        // request a window can't mistake a month total for one.
+        window: days == null ? null : { days, impressions: windowImpressions, calls: windowCalls },
         throughDate: `${end.getFullYear()}-${pad(end.getMonth() + 1)}-${pad(end.getDate())}`,
       });
     }

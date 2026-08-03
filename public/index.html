@@ -967,6 +967,78 @@ function GHLLeadsCard({client,setData,setTab}){
   );
 }
 
+// ─── Calls from Google (GBP call-button taps) ───
+// Deliberately mirrors GHLLeadsCard beat for beat — same fetch-once-per-
+// client guard, same local-state-is-truth caching, same loading/error/empty
+// shapes — because the two sit side by side on the Dashboard and any
+// divergence in behaviour reads as a bug in whichever one moves differently.
+// Titled "Calls from Google" for the same reason as the Reports card:
+// CALL_CLICKS is taps on the call button, not connected calls.
+function GBPCallsCard({client,setData,setTab}){
+  const [state,setState]=useState('idle'); // idle|loading|loaded|error
+  const [error,setError]=useState('');
+  const [callsData,setCallsData]=useState(client.gbpCallsSummary||null);
+  const fetchedForRef=useRef(null);
+
+  const ready=!!client.gbpLocationId;
+
+  const fetchCalls=async()=>{
+    if(!ready)return;
+    setState('loading');setError('');
+    try{
+      // months:1 keeps the fetched range as small as the 28-day window
+      // allows — the Reports card is what needs 4 months of history, not
+      // this one.
+      const r=await fetch('/api/gbp-metrics',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({action:'query',locationId:client.gbpLocationId,days:28,months:1})});
+      const j=await r.json();
+      if(!r.ok||j.error||j.available===false){setState('error');setError(j.error||'Failed to load call data');return}
+      const summary={calls:j.window?.calls??0,impressions:j.window?.impressions??0,windowDays:j.window?.days??28,fetchedAt:Date.now()};
+      setCallsData(summary);
+      setState('loaded');
+      if(setData){
+        setData(prev=>{const nd={...prev,clients:prev.clients.map(c=>c.id===client.id?{...c,gbpCallsSummary:summary}:c)};saveData(nd);return nd});
+      }
+    }catch(e){setState('error');setError('Network error reaching Google Business Profile.')}
+  };
+
+  useEffect(()=>{
+    if(fetchedForRef.current===client.id)return;
+    fetchedForRef.current=client.id;
+    setCallsData(client.gbpCallsSummary||null);
+    if(ready)fetchCalls();
+  },[client.id,client.gbpLocationId]);
+
+  return(
+    <div className="stitch-glass-card rounded-[24px] p-6">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-lg font-bold text-brand-dark">Calls from Google</h3>
+        {ready&&<button onClick={fetchCalls} disabled={state==='loading'} className="text-xs text-brand hover:underline disabled:opacity-50">Refresh</button>}
+      </div>
+      {!ready&&(
+        <div className="text-center py-6">
+          <p className="text-sm text-muted-stone mb-2">Not connected yet</p>
+          {setTab&&<button onClick={()=>setTab('settings')} className="text-xs text-brand hover:underline">Connect Google Business Profile</button>}
+        </div>
+      )}
+      {ready&&state==='loading'&&!callsData&&(
+        <div className="text-center py-6"><div className="inline-block w-6 h-6 border-4 border-brand border-t-transparent rounded-full animate-spin"/></div>
+      )}
+      {ready&&state==='error'&&(
+        <div className="text-center py-4">
+          <p className="text-xs text-red-600 mb-2">{error}</p>
+          <button onClick={fetchCalls} className="text-xs text-brand hover:underline">Try Again</button>
+        </div>
+      )}
+      {ready&&callsData&&(
+        <>
+          <p className="text-3xl font-bold text-brand-dark">{callsData.calls.toLocaleString()}</p>
+          <p className="text-[11px] text-muted-stone mt-1">Call button taps · last {callsData.windowDays} days · as of {fmt(callsData.fetchedAt)}</p>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── Client Dashboard ───
 function ClientDashboard({client,data,setData,setTab}){
   const c=client;
@@ -1245,40 +1317,7 @@ function ClientDashboard({client,data,setData,setTab}){
           </div>
         </div>
 
-        <div className="stitch-glass-card rounded-[24px] p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-bold text-brand-dark">Google Analytics</h3>
-            {setTab&&<button onClick={()=>setTab('analytics')} className="text-xs text-brand hover:underline">View Details</button>}
-          </div>
-          {c.ga4Summary?(
-            <>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="bg-black/[0.03] rounded-xl p-4 text-center">
-                  <p className="text-xs text-muted-stone mb-1">Users</p>
-                  <p className="text-xl font-bold text-brand-dark">{Math.round(c.ga4Summary.totalUsers).toLocaleString()}</p>
-                </div>
-                <div className="bg-black/[0.03] rounded-xl p-4 text-center">
-                  <p className="text-xs text-muted-stone mb-1">Sessions</p>
-                  <p className="text-xl font-bold text-brand-dark">{Math.round(c.ga4Summary.totalSessions).toLocaleString()}</p>
-                </div>
-                <div className="bg-black/[0.03] rounded-xl p-4 text-center">
-                  <p className="text-xs text-muted-stone mb-1">Conversions</p>
-                  <p className="text-xl font-bold text-brand-dark">{Math.round(c.ga4Summary.totalConversions).toLocaleString()}</p>
-                </div>
-                <div className="bg-black/[0.03] rounded-xl p-4 text-center">
-                  <p className="text-xs text-muted-stone mb-1">Engagement</p>
-                  <p className="text-xl font-bold text-brand-dark">{c.ga4Summary.avgEngagementRate.toFixed(1)}%</p>
-                </div>
-              </div>
-              <p className="text-[11px] text-muted-stone mt-3">Last 28 days · as of {fmt(c.ga4Summary.fetchedAt)}</p>
-            </>
-          ):(
-            <div className="text-center py-6">
-              <p className="text-sm text-muted-stone mb-2">Not connected yet</p>
-              {setTab&&<button onClick={()=>setTab('analytics')} className="text-xs text-brand hover:underline">Connect Google Analytics</button>}
-            </div>
-          )}
-        </div>
+        <GBPCallsCard client={c} setData={setData} setTab={setTab}/>
 
         <GHLLeadsCard client={c} setData={setData} setTab={setTab}/>
       </div>
@@ -6120,10 +6159,10 @@ function GA4Section({client,setData,data}){
   // expiry, no "please reconnect." Replaces the old client-side Google
   // Identity Services flow, whose access tokens expired every hour and
   // needed a fresh popup approval to refresh — that's exactly why the
-  // Dashboard's Google Analytics card could show "Not connected" for a
-  // client that WAS connected: the popup-based token had simply expired
-  // silently since the last time someone opened this tab, and ga4Summary
-  // never got refreshed.
+  // Dashboard's old Google Analytics card (removed 2026-08-02, replaced by
+  // GBPCallsCard) could show "Not connected" for a client that WAS
+  // connected: the popup-based token had simply expired silently since the
+  // last time someone opened this tab, and ga4Summary never got refreshed.
   const [gaState,setGaState]=useState('loading'); // loading|pick|loaded|nodata|error
   const [gaError,setGaError]=useState('');
   const [gaProperties,setGaProperties]=useState([]);
@@ -6159,8 +6198,11 @@ function GA4Section({client,setData,data}){
       const d=await api({action:'query',propertyId});
       if(d.noData){setGaState('nodata');setGaError('No analytics data available for this property in the last 28 days.');return}
       setGaData(d);setGaState('loaded');
-      // Cache a lightweight summary onto the client so other tabs (e.g. the
-      // Dashboard) can show real GA4 numbers without their own fetch.
+      // Cached for other tabs to read without their own fetch. NOTE: as of
+      // 2026-08-02 nothing reads it — the Dashboard card that did was
+      // replaced by GBPCallsCard. Kept because it's cheap and GA4 numbers
+      // are the obvious thing to surface elsewhere later; delete the write
+      // if that never happens.
       if(setData){
         const summary={totalUsers:d.totalUsers,totalSessions:d.totalSessions,totalConversions:d.totalConversions,avgEngagementRate:d.avgEngagementRate,fetchedAt:Date.now()};
         setData(prev=>{const nd={...prev,clients:prev.clients.map(c=>c.id===client.id?{...c,ga4Summary:summary}:c)};saveData(nd);return nd});
