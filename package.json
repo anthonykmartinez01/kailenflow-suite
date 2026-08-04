@@ -4,7 +4,8 @@
   "private": true,
   "description": "Netlify functions for the KailenFlow Suite",
   "scripts": {
-    "build": "node build.mjs"
+    "build": "node build.mjs",
+    "test:guardrails": "node scripts/test-gbp-guardrails.mjs"
   },
   "comments": {
     "babel": "@babel/core and @babel/preset-react are build-time only (build.mjs), but live in dependencies rather than devDependencies on purpose: Netlify skips devDependencies whenever NODE_ENV=production, which would fail the deploy build."

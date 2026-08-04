@@ -8542,6 +8542,43 @@ async function callContentAPI(systemPrompt, userPrompt, apiKey, maxTokens){
 // v4 — `{action:"posts-capability"}` on /api/gbp-metrics answers whether v4 is
 // actually reachable, and the publish button is a small addition once it says
 // yes. Building it blind would have meant a button that 403s for every client.
+// ─── MIRROR of netlify/shared/gbp-post-rules.mts ───
+// The server is authoritative — this copy exists so an operator sees a problem
+// while writing instead of at publish time. This app has no bundler, so the
+// two cannot share a module; if you change a rule, change BOTH. Codes and
+// severities are kept identical so the two can be diffed at a glance.
+const GBP_OFFER_RE=/% off|free \w+|discount|sale|limited time/i;
+const GBP_EMOJI_RE=/[\p{Extended_Pictographic}\u{FE0F}\u{1F3FB}-\u{1F3FF}]/u;
+const GBP_URL_RE=/\bhttps?:\/\/|\bwww\.[a-z0-9-]|\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.(?:com|net|org|co|io|us|biz|info|shop|services)\b/i;
+const GBP_PHONE_RE=/(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}/;
+const GBP_CAPS_ALLOWED=new Set(['HVAC','LLC','INC','USA','DIY','EPA','NATE','HEPA','PVC','CPVC','LED','GFCI','SEER','BTU','AC','TV','SUV','ADA','OSHA','FAQ','URL','API','PDF']);
+function validateGbpPost({text,cta,ctaUrl,clientWebsite,offerConfirmed}){
+  const blocks=[],warnings=[];
+  const t=(text||'').trim();
+  if(!t)return{blocks:[{code:'empty',message:'The post is empty.'}],warnings};
+  if(t.length>GBP_POST_MAX)blocks.push({code:'too_long',message:`${t.length} characters — over Google's ${GBP_POST_MAX} limit.`});
+  if(GBP_EMOJI_RE.test(t.replace(/[©®™]/g,'')))blocks.push({code:'emoji',message:'Remove emoji — they render poorly in Maps.'});
+  if(/(?:^|\s)#\S/.test(t))blocks.push({code:'hashtag',message:'Remove hashtags — they do nothing on GBP.'});
+  if(GBP_URL_RE.test(t))blocks.push({code:'raw_url',message:'Remove the web address from the body — links belong in the button.'});
+  if(GBP_PHONE_RE.test(t))blocks.push({code:'phone',message:'Remove the phone number from the body — the listing already shows it.'});
+  if(GBP_OFFER_RE.test(t)&&!offerConfirmed)blocks.push({code:'unconfirmed_offer',message:'This promises a discount, sale, or something free. Confirm the offer is real.'});
+  const u=(ctaUrl||'').trim();
+  if(u){
+    if(!/^https:\/\//i.test(u))blocks.push({code:'cta_not_https',message:'The button link must start with https://'});
+    else{
+      try{
+        const host=new URL(u).hostname.replace(/^www\./i,'').toLowerCase();
+        const site=clientWebsite?new URL(clientWebsite.startsWith('http')?clientWebsite:'https://'+clientWebsite).hostname.replace(/^www\./i,'').toLowerCase():null;
+        const tail=h=>h.split('.').slice(-2).join('.');
+        if(site&&tail(host)!==tail(site))warnings.push({code:'cta_third_party',message:`Button points at ${host}, not the client's site. Intentional?`});
+      }catch(e){blocks.push({code:'cta_unparseable',message:"The button link isn't a valid web address."})}
+    }
+  }else if(cta&&cta!=='CALL')blocks.push({code:'cta_missing_url',message:`The "${cta}" button needs a link.`});
+  const caps=[...new Set((t.match(/\b[A-Z]{3,}\b/g)||[]).filter(w=>!GBP_CAPS_ALLOWED.has(w)))];
+  if(caps.length)warnings.push({code:'all_caps',message:`Shouty capitals: ${caps.slice(0,4).join(', ')}.`});
+  return{blocks,warnings};
+}
+
 const GBP_CTAS=[
   {value:'LEARN_MORE',label:'Learn more'},{value:'BOOK',label:'Book'},
   {value:'ORDER',label:'Order online'},{value:'SHOP',label:'Shop'},
@@ -8553,7 +8590,15 @@ const GBP_CTAS=[
 const GBP_POST_MAX=1500;
 const GBP_POST_IDEAL=300;
 
-function GBPPostComposer({client,setData,apiKey,niche,city,services}){
+function GBPPostComposer({client,setData,data,apiKey,niche,city,services}){
+  // Both kill switches default OFF, including for clients created later —
+  // `!==false` would silently opt every new client in, so this is an explicit
+  // `===true`. Turning them off never blocks composing or saving; only
+  // publishing to a live listing is gated.
+  const globalPublish=data?.gbpPublishEnabled===true;
+  const clientPublish=client.gbpPublishEnabled===true;
+  const setGlobalPublish=(on)=>setData(prev=>{const nd={...prev,gbpPublishEnabled:on};saveData(nd);return nd});
+  const setClientPublish=(on)=>setData(prev=>{const nd={...prev,clients:prev.clients.map(c=>c.id===client.id?{...c,gbpPublishEnabled:on}:c)};saveData(nd);return nd});
   const [count,setCount]=useState(10);
   const [focus,setFocus]=useState('');
   const [loading,setLoading]=useState(false);
@@ -8663,6 +8708,33 @@ Rules:
         )}
       </div>
 
+      {/* Publishing kill switches. Both OFF by default, including for new
+          clients. Nothing here affects writing or saving posts. */}
+      <div className="bg-black/[0.03] rounded-2xl p-4 mb-4">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="material-symbols-outlined text-[18px] text-muted-stone">shield</span>
+          <p className="text-sm font-bold text-brand-dark">Publishing to Google</p>
+        </div>
+        <div className="flex flex-wrap gap-4">
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={globalPublish} onChange={e=>setGlobalPublish(e.target.checked)} className="w-4 h-4 accent-[#C45A30]"/>
+            <span>Enabled <b>globally</b></span>
+          </label>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={clientPublish} onChange={e=>setClientPublish(e.target.checked)} className="w-4 h-4 accent-[#C45A30]"/>
+            <span>Enabled for <b>{client.name||'this client'}</b></span>
+          </label>
+        </div>
+        <p className="text-[11px] text-muted-stone mt-2">
+          {globalPublish&&clientPublish
+            ?'Both switches are on. Publishing will still require confirming each post individually.'
+            :'Publishing is blocked. Writing, editing, and copying posts out are unaffected.'}
+        </p>
+        <p className="text-[11px] text-muted-stone mt-1">
+          To take a published post down, delete it in the Google Business Profile app or at business.google.com — this tool is not permitted to delete from a listing.
+        </p>
+      </div>
+
       <div className="flex items-end gap-3 flex-wrap mb-3">
         <div>
           <label className="text-xs text-muted-stone">How many</label>
@@ -8690,6 +8762,8 @@ Rules:
           const len=p.text.length;
           const over=len>GBP_POST_MAX;
           const longish=!over&&len>GBP_POST_IDEAL;
+          const v=validateGbpPost({text:p.text,cta:p.cta,ctaUrl:p.ctaUrl,clientWebsite:client.website,offerConfirmed:p.offerConfirmed});
+          const offerish=GBP_OFFER_RE.test(p.text||'');
           return(
             <div key={p.id} className={`border rounded-2xl p-3 ${p.usedAt?'border-glass-border bg-black/[0.02] opacity-60':'border-glass-border'}`}>
               <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
@@ -8704,7 +8778,25 @@ Rules:
                   {GBP_CTAS.map(c=><option key={c.value} value={c.value}>{c.label}</option>)}
                 </select>
               </div>
-              <textarea value={p.text} onChange={e=>updatePost(p.id,{text:e.target.value})} rows="4" className="w-full px-3 py-2 text-sm border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/>
+              <textarea value={p.text} onChange={e=>updatePost(p.id,{text:e.target.value})} rows="4" className={`w-full px-3 py-2 text-sm border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none ${v.blocks.length?'border-red-300':'border-glass-border'}`}/>
+
+              {v.blocks.map(b=>(
+                <div key={b.code} className="flex items-start gap-1.5 text-xs text-red-700 mt-2">
+                  <span className="material-symbols-outlined text-[15px] flex-shrink-0">block</span><span>{b.message}</span>
+                </div>
+              ))}
+              {v.warnings.map(w=>(
+                <div key={w.code} className="flex items-start gap-1.5 text-xs text-amber-700 mt-2">
+                  <span className="material-symbols-outlined text-[15px] flex-shrink-0">warning</span><span>{w.message}</span>
+                </div>
+              ))}
+              {offerish&&(
+                <label className="flex items-start gap-2 text-xs mt-2 cursor-pointer bg-amber-50 rounded-xl px-3 py-2">
+                  <input type="checkbox" checked={!!p.offerConfirmed} onChange={e=>updatePost(p.id,{offerConfirmed:e.target.checked})} className="w-4 h-4 mt-0.5 accent-[#C45A30] flex-shrink-0"/>
+                  <span className="text-amber-800">I confirm this offer is real and currently available.</span>
+                </label>
+              )}
+
               <div className="flex items-center gap-2 flex-wrap mt-2">
                 <DashPill onClick={()=>copyPost(p)} icon="content_copy">{copiedId===p.id?'Copied!':'Copy'}</DashPill>
                 <DashPill onClick={()=>updatePost(p.id,{usedAt:p.usedAt?null:new Date().toISOString()})} icon={p.usedAt?'undo':'check'}>
@@ -8928,7 +9020,7 @@ Rules:
     <div className="fade-in font-manrope space-y-6">
       <h3 className="text-xl font-bold text-brand-dark">Google Business Profile</h3>
 
-      <GBPPostComposer client={client} setData={setData} apiKey={apiKey} niche={niche} city={city} services={services}/>
+      <GBPPostComposer client={client} setData={setData} data={data} apiKey={apiKey} niche={niche} city={city} services={services}/>
 
       {/* GBP Stats */}
       {(()=>{

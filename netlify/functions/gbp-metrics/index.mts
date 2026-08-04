@@ -1,6 +1,7 @@
 import type { Context, Config } from "@netlify/functions";
 import { isAuthed, unauthorized } from "../../shared/auth.mts";
 import { getGoogleAccessToken } from "../../shared/google-auth.mts";
+import { gbpRead } from "../../shared/gbp-guard.mts";
 
 // Google Business Profile performance data for ONE client's listing
 // (client.gbpLocationId, set in Settings) — powers the Reports tab's
@@ -83,8 +84,12 @@ class GbpError extends Error {
   }
 }
 
+// Every Business Profile call in this function goes through gbpRead, which
+// asserts against the write guard (shared/gbp-guard.mts). These are all reads,
+// so they pass — but routing them through the guard means a future edit that
+// turns one into a mutation fails loudly instead of silently succeeding.
 async function gbpFetch(url: string, token: string): Promise<any> {
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await gbpRead(url, token);
   const body = await res.json().catch(() => ({} as any));
   if (!res.ok) {
     throw new GbpError(body?.error?.message || `Business Profile API error ${res.status}`, res.status);
@@ -177,7 +182,7 @@ export default async (req: Request, _ctx: Context) => {
       if (!accountName) return json({ available: false, reason: "no-accounts", message: "No Business Profile accounts are visible to the connected Google account." });
 
       const url = `${POSTS_API_V4}/${accountName}/locations/${encodeURIComponent(locationId)}/localPosts?pageSize=1`;
-      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const res = await gbpRead(url, token);
       const bodyText = await res.text();
       if (res.ok) {
         return json({
