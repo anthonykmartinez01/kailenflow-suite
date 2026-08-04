@@ -31,6 +31,9 @@ import { getGoogleAccessToken } from "../../shared/google-auth.mts";
 const ACCOUNTS_API = "https://mybusinessaccountmanagement.googleapis.com/v1";
 const INFO_API = "https://mybusinessbusinessinformation.googleapis.com/v1";
 const PERF_API = "https://businessprofileperformance.googleapis.com/v1";
+// Posts never moved off the legacy v4 surface when the rest of the Business
+// Profile APIs were split up — that's why this one host looks out of place.
+const POSTS_API_V4 = "https://mybusiness.googleapis.com/v4";
 
 // The four metrics that together make up "how often did this listing show
 // up" — Google reports Search and Maps separately, and each split by device,
@@ -151,6 +154,49 @@ export default async (req: Request, _ctx: Context) => {
       }));
 
       return json({ available: true, locations: perAccount.flat() });
+    }
+
+    // ─── posts-capability: can we publish posts via the API at all? ──────
+    // GBP posts live on the OLD v4 endpoint (mybusiness.googleapis.com/v4),
+    // a different API from businessprofileperformance which serves the
+    // Impressions/Calls cards. Our access approval was verified against the
+    // latter, so v4 availability is genuinely unknown — this answers it
+    // before anyone builds a publish button on the assumption it works.
+    //
+    // Strictly READ-ONLY: it LISTS existing posts (GET). It never creates,
+    // edits, or deletes anything on a client's live listing.
+    if (action === "posts-capability") {
+      const locationId = normalizeLocationId((body.locationId || "").toString());
+      if (!locationId) return json({ error: "locationId is required" }, 400);
+
+      // v4 addresses a location as accounts/{a}/locations/{l} — unlike the
+      // performance API's bare locations/{l} — so the account has to be
+      // resolved first.
+      const accts = await gbpFetch(`${ACCOUNTS_API}/accounts?pageSize=20`, token);
+      const accountName = accts.accounts?.[0]?.name;
+      if (!accountName) return json({ available: false, reason: "no-accounts", message: "No Business Profile accounts are visible to the connected Google account." });
+
+      const url = `${POSTS_API_V4}/${accountName}/locations/${encodeURIComponent(locationId)}/localPosts?pageSize=1`;
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+      const bodyText = await res.text();
+      if (res.ok) {
+        return json({
+          available: true,
+          endpoint: url.replace(/\?.*$/, ""),
+          message: "The v4 Local Posts API is reachable — publishing straight to the listing can be wired up.",
+        });
+      }
+      let detail = bodyText.slice(0, 300);
+      try { detail = JSON.parse(bodyText)?.error?.message || detail; } catch { /* keep raw text */ }
+      return json({
+        available: false,
+        status: res.status,
+        reason: /has not been used|is disabled|accessnotconfigured|service_disabled/i.test(detail)
+          ? "api-not-enabled"
+          : res.status === 403 ? "not-authorized" : res.status === 404 ? "not-found" : "unknown",
+        message: `v4 Local Posts is not usable for this project (HTTP ${res.status}). Publishing cannot be wired up until this resolves.`,
+        detail,
+      });
     }
 
     // ─── query: the card payload ─────────────────────────────────────────

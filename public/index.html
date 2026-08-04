@@ -8499,7 +8499,16 @@ function substituteVars(template, client){
   return result;
 }
 
-async function callContentAPI(systemPrompt, userPrompt, apiKey){
+// ⚠️ MODEL FIXED 2026-08-04 — this was pinned to `claude-opus-4-20250514`,
+// which Anthropic RETIRED on 2026-06-15. Every call had been returning a 404
+// since then, so the Services / Categories / Organizer tools in the GBP tab
+// were silently broken (the error surfaced only as a red message in each
+// tool). Now on `claude-opus-5`. Don't re-pin a dated model ID here: dated
+// snapshots age out on a schedule, whereas `claude-opus-5` is a stable alias.
+// max_tokens raised 8192 -> 16000 because this model thinks by default and
+// max_tokens caps thinking + response text together — the old ceiling would
+// truncate longer outputs like a full batch of GBP posts.
+async function callContentAPI(systemPrompt, userPrompt, apiKey, maxTokens){
   const resp = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -8509,8 +8518,8 @@ async function callContentAPI(systemPrompt, userPrompt, apiKey){
       'anthropic-dangerous-direct-browser-access': 'true'
     },
     body: JSON.stringify({
-      model: 'claude-opus-4-20250514',
-      max_tokens: 8192,
+      model: 'claude-opus-5',
+      max_tokens: maxTokens||16000,
       system: systemPrompt + '\n\nCRITICAL FORMATTING RULE: NEVER use em dashes (—) or en dashes (–) anywhere in the output. Use regular hyphens (-) or rewrite the sentence to avoid dashes entirely. This is non-negotiable. Every single dash in your output must be a standard hyphen. Em dashes and en dashes make content look AI-generated.',
       messages: [{ role: 'user', content: userPrompt }]
     })
@@ -8521,6 +8530,173 @@ async function callContentAPI(systemPrompt, userPrompt, apiKey){
 }
 
 // ─── GBP Tab Component ───
+// ─── GBP Post Composer ───
+// Generates a batch of Google Business Profile posts in the client's own
+// voice, keeps them as an editable per-client library, and copies them out
+// one at a time (or all at once) for scheduling in GoHighLevel / LeadSnap.
+//
+// Publishing straight to the listing is deliberately NOT wired yet: GBP posts
+// live on the older mybusiness.googleapis.com/v4 Local Posts endpoint, which
+// is a different API from the businessprofileperformance one the Impressions
+// and Calls cards use. Our access approval was verified against those two, not
+// v4 — `{action:"posts-capability"}` on /api/gbp-metrics answers whether v4 is
+// actually reachable, and the publish button is a small addition once it says
+// yes. Building it blind would have meant a button that 403s for every client.
+const GBP_CTAS=[
+  {value:'LEARN_MORE',label:'Learn more'},{value:'BOOK',label:'Book'},
+  {value:'ORDER',label:'Order online'},{value:'SHOP',label:'Shop'},
+  {value:'SIGN_UP',label:'Sign up'},{value:'CALL',label:'Call now'},
+];
+// Google's hard cap is 1500 characters, but posts are truncated in the Maps
+// UI well before that — the visible-without-tapping window is roughly 150-300,
+// which is what the generator targets and what the counter warns against.
+const GBP_POST_MAX=1500;
+const GBP_POST_IDEAL=300;
+
+function GBPPostComposer({client,setData,apiKey,niche,city,services}){
+  const [count,setCount]=useState(10);
+  const [focus,setFocus]=useState('');
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState('');
+  const [copiedId,setCopiedId]=useState('');
+  const posts=client.gbpPosts||[];
+
+  const savePosts=(next)=>{
+    setData(prev=>{const nd={...prev,clients:prev.clients.map(c=>c.id===client.id?{...c,gbpPosts:next}:c)};saveData(nd);return nd});
+  };
+
+  const generate=async()=>{
+    if(!apiKey){setError('Set your API key in the Content tab first.');return}
+    if(!niche){setError('Set the client industry/primary category in Settings first.');return}
+    setLoading(true);setError('');
+    try{
+      const systemPrompt=`You write Google Business Profile posts for local service businesses. You write the way a competent business owner writes about their own work: specific, plainly worded, and grounded in what the business actually does. You never write marketing filler, never open with a rhetorical question, and never use hashtags or emoji (they read as spam on GBP and are not rendered well in Maps). NEVER use em dashes or en dashes - use regular hyphens only.
+
+Return ONLY a JSON array, no prose before or after it, no markdown code fences. Each element must be an object with exactly these keys:
+  "text"  - the post body, ${GBP_POST_IDEAL} characters or fewer, plain text, no hashtags, no emoji
+  "cta"   - one of: ${GBP_CTAS.map(c=>c.value).join(', ')}
+  "topic" - two or three words naming what the post is about, for the operator's own reference`;
+      const userPrompt=`Write ${count} Google Business Profile posts for a ${niche} business${city&&city.trim()!==','?' in '+city:''}.
+
+${services?'Services they offer: '+services:''}
+${client.name?'Business name: '+client.name:''}
+${focus.trim()?'Focus these posts on: '+focus.trim():'Spread the posts across their different services, plus seasonal timing, common customer questions, and what makes them different locally.'}
+
+Rules:
+- Each post stands alone. Do not number them or reference each other.
+- Vary how each post opens. Do not start more than one post the same way.
+- Name specific services, materials, problems, or local details rather than generic claims like "quality service" or "we care about our customers".
+- Do not invent facts you were not given: no prices, no guarantees, no awards, no years in business, no staff names, no review counts.
+- Write at a reading level a homeowner skims comfortably.`;
+      const raw=await callContentAPI(systemPrompt,userPrompt,apiKey);
+      // The model is told to return bare JSON, but tolerate a stray code
+      // fence or a sentence of preamble rather than throwing away a good
+      // batch over formatting.
+      const match=raw.match(/\[[\s\S]*\]/);
+      if(!match)throw new Error('The model did not return a usable list of posts. Try again.');
+      const parsed=JSON.parse(match[0]);
+      if(!Array.isArray(parsed)||!parsed.length)throw new Error('No posts came back. Try again.');
+      const now=new Date().toISOString();
+      const fresh=parsed.filter(p=>p&&typeof p.text==='string'&&p.text.trim()).map((p,i)=>({
+        id:uid(),
+        text:String(p.text).trim(),
+        cta:GBP_CTAS.some(c=>c.value===p.cta)?p.cta:'LEARN_MORE',
+        topic:String(p.topic||'').trim(),
+        createdAt:now,
+        usedAt:null,
+      }));
+      if(!fresh.length)throw new Error('The posts that came back were empty. Try again.');
+      // Newest first, and never discard what's already saved — a second
+      // generation adds to the library rather than replacing it.
+      savePosts([...fresh,...posts]);
+    }catch(e){setError(e.message||'Generation failed.')}
+    setLoading(false);
+  };
+
+  const updatePost=(id,fields)=>savePosts(posts.map(p=>p.id===id?{...p,...fields}:p));
+  const deletePost=(id)=>savePosts(posts.filter(p=>p.id!==id));
+  const copyPost=(p)=>{
+    navigator.clipboard.writeText(p.text).then(()=>{setCopiedId(p.id);setTimeout(()=>setCopiedId(''),1800)});
+  };
+  const copyAll=()=>{
+    const unused=posts.filter(p=>!p.usedAt);
+    const body=unused.map(p=>p.text).join('\n\n---\n\n');
+    navigator.clipboard.writeText(body).then(()=>{setCopiedId('all');setTimeout(()=>setCopiedId(''),1800)});
+  };
+
+  const unusedCount=posts.filter(p=>!p.usedAt).length;
+
+  return(
+    <div className="stitch-glass-card rounded-[24px] p-6">
+      <div className="flex items-center justify-between gap-2 flex-wrap mb-1">
+        <h3 className="text-base font-bold text-brand-dark flex items-center gap-2">
+          <span className="material-symbols-outlined text-brand text-[22px]">storefront</span>Post Composer
+        </h3>
+        {posts.length>0&&(
+          <DashPill onClick={copyAll} icon="content_copy" title="Copy every post that isn't marked used">
+            {copiedId==='all'?'Copied!':`Copy all ${unusedCount}`}
+          </DashPill>
+        )}
+      </div>
+      <p className="text-sm text-muted-stone mb-4">Writes posts in the client's voice for scheduling in GoHighLevel or LeadSnap. Generating again adds to the library instead of replacing it.</p>
+
+      <div className="flex items-end gap-3 flex-wrap mb-3">
+        <div>
+          <label className="text-xs text-muted-stone">How many</label>
+          <input type="number" min="1" max="30" value={count} onChange={e=>setCount(Math.max(1,Math.min(30,Number(e.target.value)||1)))} className="touch-target w-20 mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none block"/>
+        </div>
+        <div className="flex-1 min-w-[200px]">
+          <label className="text-xs text-muted-stone">Focus (optional)</label>
+          <input value={focus} onChange={e=>setFocus(e.target.value)} placeholder="e.g. spring AC tune-ups" className="touch-target w-full mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/>
+        </div>
+        <DashPill tone="brand" onClick={generate} icon={loading?'hourglass_top':'auto_awesome'}>
+          {loading?'Writing...':'Generate posts'}
+        </DashPill>
+      </div>
+      {error&&<div className="rounded-xl p-2 text-xs mb-3 bg-red-50 text-red-700">{error}</div>}
+
+      {posts.length===0&&!loading&&(
+        <div className="text-center py-8">
+          <span className="material-symbols-outlined text-3xl text-muted-stone/40 mb-2 block">edit_note</span>
+          <p className="text-sm text-muted-stone">No posts yet. Generate a batch to get started.</p>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {posts.map(p=>{
+          const len=p.text.length;
+          const over=len>GBP_POST_MAX;
+          const longish=!over&&len>GBP_POST_IDEAL;
+          return(
+            <div key={p.id} className={`border rounded-2xl p-3 ${p.usedAt?'border-glass-border bg-black/[0.02] opacity-60':'border-glass-border'}`}>
+              <div className="flex items-center justify-between gap-2 flex-wrap mb-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  {p.topic&&<StatusPill tone="brand">{p.topic}</StatusPill>}
+                  {p.usedAt&&<StatusPill tone="good">Used</StatusPill>}
+                  <span className={`text-[11px] ${over?'text-red-600 font-bold':longish?'text-amber-600':'text-muted-stone'}`}>
+                    {len} chars{over?` - over Google's ${GBP_POST_MAX} limit`:longish?' - may get cut off in Maps':''}
+                  </span>
+                </div>
+                <select value={p.cta} onChange={e=>updatePost(p.id,{cta:e.target.value})} className="touch-target text-xs px-2 py-1 border border-glass-border rounded-xl bg-white/70 focus:ring-1 focus:ring-brand focus:outline-none">
+                  {GBP_CTAS.map(c=><option key={c.value} value={c.value}>{c.label}</option>)}
+                </select>
+              </div>
+              <textarea value={p.text} onChange={e=>updatePost(p.id,{text:e.target.value})} rows="4" className="w-full px-3 py-2 text-sm border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/>
+              <div className="flex items-center gap-2 flex-wrap mt-2">
+                <DashPill onClick={()=>copyPost(p)} icon="content_copy">{copiedId===p.id?'Copied!':'Copy'}</DashPill>
+                <DashPill onClick={()=>updatePost(p.id,{usedAt:p.usedAt?null:new Date().toISOString()})} icon={p.usedAt?'undo':'check'}>
+                  {p.usedAt?'Mark unused':'Mark used'}
+                </DashPill>
+                <DashPill onClick={()=>deletePost(p.id)} icon="delete">Delete</DashPill>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function GBPTab({client,setData,data}){
   const [apiKey]=useState(()=>localStorage.getItem('kf_content_apikey')||'');
   const cc=client.contentConfig||{};
@@ -8728,6 +8904,8 @@ Rules:
   return(
     <div className="fade-in font-manrope space-y-6">
       <h3 className="text-xl font-bold text-brand-dark">Google Business Profile</h3>
+
+      <GBPPostComposer client={client} setData={setData} apiKey={apiKey} niche={niche} city={city} services={services}/>
 
       {/* GBP Stats */}
       {(()=>{
