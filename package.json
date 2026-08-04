@@ -3,7 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "description": "Netlify functions for the KailenFlow Suite",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "comments": {
+    "babel": "@babel/core and @babel/preset-react are build-time only (build.mjs), but live in dependencies rather than devDependencies on purpose: Netlify skips devDependencies whenever NODE_ENV=production, which would fail the deploy build."
+  },
   "dependencies": {
+    "@babel/core": "^7.24.0",
+    "@babel/preset-react": "^7.23.3",
     "@netlify/blobs": "^8.1.0",
     "firebase-admin": "^12.7.0",
     "tweetsodium": "^0.0.5"

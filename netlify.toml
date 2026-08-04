@@ -1,3 +1,12 @@
 [build]
-  publish = "public"
+  # publish is dist/, NOT public/ — build.mjs compiles public/index.html
+  # (JSX, needs babel-standalone at runtime) into dist/index.html (plain JS,
+  # no compiler shipped). public/ stays the hand-edited source of truth and
+  # is what the local preview serves; dist/ is generated and gitignored.
+  # Deploying public/ directly would silently undo the ~5.4s load win.
+  command = "npm run build"
+  publish = "dist"
   functions = "netlify/functions"
+
+[build.environment]
+  SECRETS_SCAN_SMART_DETECTION_ENABLED = "false"

@@ -6,3 +6,6 @@ node_modules/
 
 # Local tool state
 .claude/scheduled_tasks.lock
+
+# Build output — generated from public/ by build.mjs on every deploy
+dist/

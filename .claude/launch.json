@@ -6,6 +6,30 @@
       "runtimeExecutable": "npx",
       "runtimeArgs": ["-y", "serve", "public", "-l", "5178"],
       "port": 5178
+    },
+    {
+      "name": "dist-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["-y", "serve", "dist", "-l", "5179"],
+      "port": 5179
+    },
+    {
+      "name": "page-preview",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "-e",
+        "const h=require('http'),f=require('fs'),p=require('path');const D='C:/Users/ANTHON~1/AppData/Local/Temp/claude/C--Users-Anthony-Martinez-Downloads-kailenflow-suite/2ad6ea1d-e9e6-4edb-8be4-78057f78fdad/scratchpad';const T={'.html':'text/html; charset=utf-8','.css':'text/css','.js':'text/javascript','.webp':'image/webp','.png':'image/png','.svg':'image/svg+xml','.woff2':'font/woff2'};h.createServer((q,s)=>{let u=decodeURIComponent(q.url.split('?')[0]);if(u==='/')u='/preview.html';const fp=p.join(D,u);f.readFile(fp,(e,d)=>{if(e){s.writeHead(404,{'content-type':'text/plain'});return s.end('not found: '+u)}s.writeHead(200,{'content-type':T[p.extname(fp).toLowerCase()]||'application/octet-stream'});s.end(d)})}).listen(4173,()=>console.log('page-preview listening on http://localhost:4173'))"
+      ],
+      "port": 4173
+    },
+    {
+      "name": "rankin-dist",
+      "runtimeExecutable": "node",
+      "runtimeArgs": [
+        "-e",
+        "const h=require('http'),f=require('fs'),p=require('path');const D='C:/Users/ANTHON~1/AppData/Local/Temp/claude/C--Users-Anthony-Martinez-Downloads-kailenflow-suite/2ad6ea1d-e9e6-4edb-8be4-78057f78fdad/scratchpad/rankin-repo/dist';const T={'.html':'text/html; charset=utf-8','.css':'text/css','.js':'text/javascript','.webp':'image/webp','.png':'image/png','.jpg':'image/jpeg','.svg':'image/svg+xml','.woff2':'font/woff2','.xml':'application/xml','.json':'application/json'};h.createServer((q,s)=>{let u=decodeURIComponent(q.url.split('?')[0]);if(u==='/')u='/service-areas/kf-preview.html';let fp=p.join(D,u);if(!f.existsSync(fp)&&f.existsSync(fp+'.html'))fp=fp+'.html';f.readFile(fp,(e,d)=>{if(e){s.writeHead(404,{'content-type':'text/plain'});return s.end('not found: '+u)}s.writeHead(200,{'content-type':T[p.extname(fp).toLowerCase()]||'application/octet-stream'});s.end(d)})}).listen(4174,()=>console.log('rankin-dist on http://localhost:4174'))"
+      ],
+      "port": 4174
     }
   ]
 }
