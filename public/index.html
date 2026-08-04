@@ -8559,7 +8559,21 @@ function GBPPostComposer({client,setData,apiKey,niche,city,services}){
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState('');
   const [copiedId,setCopiedId]=useState('');
+  // Answers "can we publish straight to the listing yet?" on demand. The
+  // endpoint is auth-gated (like every /api route here), so it can't be
+  // curl'd — without this button the probe would be unreachable in practice.
+  const [probe,setProbe]=useState(null); // null | 'loading' | {available,message}
   const posts=client.gbpPosts||[];
+
+  const checkPublishing=async()=>{
+    if(!client.gbpLocationId){setProbe({available:false,message:'Set this client\'s GBP Location ID in Settings first — the check needs a listing to look at.'});return}
+    setProbe('loading');
+    try{
+      const r=await fetch('/api/gbp-metrics',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({action:'posts-capability',locationId:client.gbpLocationId})});
+      const j=await r.json();
+      setProbe({available:!!j.available,message:j.message||j.error||'No answer from the check.'});
+    }catch(e){setProbe({available:false,message:'Network error running the check.'})}
+  };
 
   const savePosts=(next)=>{
     setData(prev=>{const nd={...prev,clients:prev.clients.map(c=>c.id===client.id?{...c,gbpPosts:next}:c)};saveData(nd);return nd});
@@ -8638,7 +8652,16 @@ Rules:
           </DashPill>
         )}
       </div>
-      <p className="text-sm text-muted-stone mb-4">Writes posts in the client's voice for scheduling in GoHighLevel or LeadSnap. Generating again adds to the library instead of replacing it.</p>
+      <p className="text-sm text-muted-stone mb-3">Writes posts in the client's voice for scheduling in GoHighLevel or LeadSnap. Generating again adds to the library instead of replacing it.</p>
+
+      <div className="flex items-center gap-2 flex-wrap mb-4">
+        <DashPill onClick={checkPublishing} icon={probe==='loading'?'hourglass_top':'help'} title="Ask Google whether posts can be published straight from here">
+          {probe==='loading'?'Checking...':'Can we post to Google directly?'}
+        </DashPill>
+        {probe&&probe!=='loading'&&(
+          <span className={`text-xs ${probe.available?'text-green-700':'text-muted-stone'}`}>{probe.available?'✅ ':''}{probe.message}</span>
+        )}
+      </div>
 
       <div className="flex items-end gap-3 flex-wrap mb-3">
         <div>
