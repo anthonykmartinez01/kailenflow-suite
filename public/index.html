@@ -936,15 +936,11 @@ function GHLLeadsCard({client,setData,setTab}){
   },[client.id,client.ghlLocationId,client.ghlPrivateToken]);
 
   return(
-    <div className="stitch-glass-card rounded-[24px] p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-bold text-brand-dark">Website Leads</h3>
-        {ready&&<button onClick={fetchLeads} disabled={state==='loading'} className="text-xs text-brand hover:underline disabled:opacity-50">Refresh</button>}
-      </div>
+    <DashCard title="Website Leads" action={ready&&<DashPill onClick={fetchLeads} icon="refresh" title="Refresh lead data">Refresh</DashPill>}>
       {!ready&&(
         <div className="text-center py-6">
-          <p className="text-sm text-muted-stone mb-2">{client.ghlLocationId?'No GHL Private Integration token set for this client':'No GHL location connected'}</p>
-          {setTab&&<button onClick={()=>setTab('settings')} className="text-xs text-brand hover:underline">Set up in Settings</button>}
+          <p className="text-sm text-muted-stone mb-3">{client.ghlLocationId?'No GHL Private Integration token set for this client':'No GHL location connected'}</p>
+          {setTab&&<DashPill onClick={()=>setTab('settings')} icon="add_link">Set up in Settings</DashPill>}
         </div>
       )}
       {ready&&state==='loading'&&!leadsData&&(
@@ -953,17 +949,17 @@ function GHLLeadsCard({client,setData,setTab}){
       {ready&&state==='error'&&(
         <div className="text-center py-4">
           <p className="text-xs text-red-600 mb-2">{error}</p>
-          {errorDetail&&<p className="text-[10px] text-red-400 mb-2 font-mono break-all">{errorDetail}</p>}
-          <button onClick={fetchLeads} className="text-xs text-brand hover:underline">Try Again</button>
+          {errorDetail&&<p className="text-[10px] text-red-400 mb-3 font-mono break-all">{errorDetail}</p>}
+          <DashPill onClick={fetchLeads} icon="refresh">Try again</DashPill>
         </div>
       )}
       {ready&&leadsData&&(
         <>
-          <p className="text-3xl font-bold text-brand-dark">{leadsData.totalLeads.toLocaleString()}</p>
-          <p className="text-[11px] text-muted-stone mt-1">Form submissions · last {leadsData.windowDays} days · as of {fmt(leadsData.fetchedAt)}</p>
+          <p className="text-4xl font-bold text-brand-dark tracking-tight leading-none">{leadsData.totalLeads.toLocaleString()}</p>
+          <p className="text-[11px] text-muted-stone mt-2">Form submissions · last {leadsData.windowDays} days · as of {fmt(leadsData.fetchedAt)}</p>
         </>
       )}
-    </div>
+    </DashCard>
   );
 }
 
@@ -1009,15 +1005,11 @@ function GBPCallsCard({client,setData,setTab}){
   },[client.id,client.gbpLocationId]);
 
   return(
-    <div className="stitch-glass-card rounded-[24px] p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="text-lg font-bold text-brand-dark">Calls from Google</h3>
-        {ready&&<button onClick={fetchCalls} disabled={state==='loading'} className="text-xs text-brand hover:underline disabled:opacity-50">Refresh</button>}
-      </div>
+    <DashCard title="Calls from Google" action={ready&&<DashPill onClick={fetchCalls} icon="refresh" title="Refresh call data">Refresh</DashPill>}>
       {!ready&&(
         <div className="text-center py-6">
-          <p className="text-sm text-muted-stone mb-2">Not connected yet</p>
-          {setTab&&<button onClick={()=>setTab('settings')} className="text-xs text-brand hover:underline">Connect Google Business Profile</button>}
+          <p className="text-sm text-muted-stone mb-3">Not connected yet</p>
+          {setTab&&<DashPill onClick={()=>setTab('settings')} icon="add_link">Connect Google Business Profile</DashPill>}
         </div>
       )}
       {ready&&state==='loading'&&!callsData&&(
@@ -1025,21 +1017,142 @@ function GBPCallsCard({client,setData,setTab}){
       )}
       {ready&&state==='error'&&(
         <div className="text-center py-4">
-          <p className="text-xs text-red-600 mb-2">{error}</p>
-          <button onClick={fetchCalls} className="text-xs text-brand hover:underline">Try Again</button>
+          <p className="text-xs text-red-600 mb-3">{error}</p>
+          <DashPill onClick={fetchCalls} icon="refresh">Try again</DashPill>
         </div>
       )}
       {ready&&callsData&&(
         <>
-          <p className="text-3xl font-bold text-brand-dark">{callsData.calls.toLocaleString()}</p>
-          <p className="text-[11px] text-muted-stone mt-1">Call button taps · last {callsData.windowDays} days · as of {fmt(callsData.fetchedAt)}</p>
+          <p className="text-4xl font-bold text-brand-dark tracking-tight leading-none">{callsData.calls.toLocaleString()}</p>
+          <p className="text-[11px] text-muted-stone mt-2">Call button taps · last {callsData.windowDays} days · as of {fmt(callsData.fetchedAt)}</p>
         </>
       )}
-    </div>
+    </DashCard>
   );
 }
 
 // ─── Client Dashboard ───
+// ─── Dashboard design primitives ───
+// Extracted 2026-08-03 while applying the reference dashboard design. Every
+// one of these was previously open-coded inline 2-6 times across
+// ClientDashboard with slightly different padding/weights each time, which is
+// exactly why the page didn't read as one system. Colours stay ours
+// (terracotta brand + stitch tokens) — only the SHAPES come from the
+// reference.
+
+// Small rounded-full action button. The reference uses this pill for every
+// in-card action ("+ New", "+ Add Member"); ours replace the bare underlined
+// text links, which had no consistent hit area — this also gets them to the
+// 44px touch target the app requires.
+function DashPill({onClick,icon,children,tone='neutral',title}){
+  const tones={
+    neutral:'bg-white/70 text-deep-obsidian/70 border-glass-border hover:bg-white hover:text-brand',
+    brand:'bg-brand text-white border-transparent hover:bg-brand-hover shadow-lg shadow-brand/20',
+  };
+  return(
+    <button onClick={onClick} title={title} className={`touch-target inline-flex items-center gap-1 px-3 py-1.5 rounded-full border text-xs font-semibold transition-colors ${tones[tone]}`}>
+      {icon&&<span className="material-symbols-outlined text-[15px]">{icon}</span>}{children}
+    </button>
+  );
+}
+
+// Soft status pill. Same shape as the reference's Completed/In Progress/
+// Pending chips. `neutral` is the default on purpose: a tone should only be
+// used where the app genuinely knows a state, never to imply a judgement
+// (e.g. "good/bad" visibility) the data doesn't actually support.
+function StatusPill({children,tone='neutral'}){
+  const tones={
+    neutral:'bg-black/[0.05] text-muted-stone',
+    brand:'bg-brand-light text-brand',
+    good:'bg-green-100 text-green-700',
+    warn:'bg-amber-100 text-amber-700',
+  };
+  return <span className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-bold whitespace-nowrap ${tones[tone]}`}>{children}</span>;
+}
+
+// Standard card shell: bold title left, optional action right. Replaces six
+// hand-rolled header rows that disagreed on title size and spacing.
+function DashCard({title,action,children,className=''}){
+  return(
+    <div className={`stitch-glass-card rounded-[24px] p-6 ${className}`}>
+      {(title||action)&&(
+        <div className="flex items-center justify-between gap-2 mb-4">
+          <h3 className="text-base font-bold text-brand-dark">{title}</h3>
+          {action}
+        </div>
+      )}
+      {children}
+    </div>
+  );
+}
+
+// The reference's headline stat tile: label top-LEFT, circular action
+// top-RIGHT, oversized number, then a delta/context line. `filled` makes it
+// the brand-coloured hero tile — the reference fills exactly one tile in the
+// row, and that single contrast is what makes the row read as a hierarchy
+// instead of N equal boxes.
+function DashStatTile({label,value,delta,deltaDirection,context,onAction,actionTitle,filled=false,children}){
+  const dirColor=filled?'text-white':deltaDirection==='down'?'text-red-600':'text-green-600';
+  return(
+    <div className={`stitch-hover-lift p-6 rounded-[24px] flex flex-col min-h-[150px] ${filled?'bg-brand text-white shadow-xl shadow-brand/20':'stitch-glass-card'}`}>
+      <div className="flex items-start justify-between gap-2">
+        <p className={`text-[11px] font-semibold uppercase tracking-widest ${filled?'opacity-80':'text-muted-stone'}`}>{label}</p>
+        {onAction&&(
+          <button onClick={onAction} title={actionTitle} aria-label={actionTitle} className={`touch-target flex-shrink-0 flex items-center justify-center w-9 h-9 rounded-full border transition-colors ${filled?'border-white/40 hover:bg-white/20':'border-glass-border hover:border-brand hover:bg-brand-light'}`}>
+            <span className={`material-symbols-outlined text-[17px] ${filled?'text-white':'text-brand'}`}>arrow_outward</span>
+          </button>
+        )}
+      </div>
+      <div className="mt-auto pt-4">
+        {children||(
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* A stat's value is not a heading — DashCard's title is. Using
+                h3 for both (as the pre-refactor markup did) made the page's
+                heading outline read as a list of bare numbers. */}
+            <p className={`text-4xl font-bold tracking-tight ${filled?'':value==='—'?'text-muted-stone':'text-brand-dark'}`}>{value}</p>
+            {delta&&(
+              <span className={`text-xs font-bold flex items-center gap-0.5 px-1.5 py-0.5 rounded-full ${filled?'bg-white/20':'bg-black/[0.05]'} ${dirColor}`}>
+                <span className="material-symbols-outlined text-[14px]">{deltaDirection==='down'?'arrow_downward':'arrow_upward'}</span>{delta}
+              </span>
+            )}
+          </div>
+        )}
+        {context&&<p className={`text-[11px] mt-1 ${filled?'opacity-70':'text-muted-stone'}`}>{context}</p>}
+      </div>
+    </div>
+  );
+}
+
+// Reference's list-row shape (Project / Team Collaboration): tinted icon
+// square, bold title, muted sub-line, right-hand slot. Replaces the old
+// bare "text left / text right" rows, which had no visual anchor.
+function DashListRow({icon,title,subtitle,right,onClick}){
+  const Tag=onClick?'button':'div';
+  return(
+    <Tag onClick={onClick} className={`w-full text-left flex items-center gap-3 py-2.5 border-b border-glass-border last:border-0 ${onClick?'hover:bg-black/[0.02] rounded-xl px-1 -mx-1':''}`}>
+      <span className="flex-shrink-0 w-9 h-9 rounded-xl bg-brand-light flex items-center justify-center">
+        <span className="material-symbols-outlined text-brand text-[19px]">{icon}</span>
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-semibold text-deep-obsidian/85 truncate">{title}</span>
+        {subtitle&&<span className="block text-[11px] text-muted-stone truncate">{subtitle}</span>}
+      </span>
+      {right&&<span className="flex-shrink-0">{right}</span>}
+    </Tag>
+  );
+}
+
+// Inner tile for grids nested inside a card (the reference's small blocks
+// within a larger panel).
+function MiniTile({label,children,className=''}){
+  return(
+    <div className={`bg-black/[0.03] rounded-2xl p-4 ${className}`}>
+      <p className="text-[11px] text-muted-stone mb-1">{label}</p>
+      {children}
+    </div>
+  );
+}
+
 function ClientDashboard({client,data,setData,setTab}){
   const c=client;
   const parseSolv=(s)=>{if(s==null)return null;const n=parseFloat(String(s).replace('%',''));return isNaN(n)?null:n};
@@ -1158,8 +1271,8 @@ function ClientDashboard({client,data,setData,setTab}){
               <div className="w-14 h-14 rounded-full bg-brand/15 text-brand flex items-center justify-center font-bold text-xl flex-shrink-0">{avatarLetter}</div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h2 className="text-xl font-bold text-brand-dark truncate">{c.name}</h2>
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Active</span>
+                  <h2 className="text-2xl font-bold text-brand-dark truncate tracking-tight">{c.name}</h2>
+                  <StatusPill tone="good">Active</StatusPill>
                 </div>
                 {c.primaryCategory&&<p className="text-sm text-brand font-medium mt-0.5">{c.primaryCategory}</p>}
               </div>
@@ -1184,10 +1297,12 @@ function ClientDashboard({client,data,setData,setTab}){
                 </div>
               )}
             </div>
-            <div className="flex items-center gap-3 mt-3 flex-wrap">
-              {setTab&&<button onClick={()=>setTab('settings')} className="touch-target px-4 py-2 bg-brand text-white rounded-xl text-sm font-medium hover:bg-brand-hover shadow-lg shadow-brand/20">Business Settings</button>}
+            <div className="flex items-center gap-2 mt-4 flex-wrap">
+              {setTab&&<DashPill tone="brand" onClick={()=>setTab('settings')} icon="settings">Business Settings</DashPill>}
               {c.website&&(
-                <button onClick={checkHeroImage} disabled={heroChecking} className="text-xs text-brand hover:underline disabled:opacity-50">{heroChecking?'Checking...':heroImage?'Re-check background image':'Retry background image'}</button>
+                <DashPill onClick={checkHeroImage} icon={heroChecking?'hourglass_top':'image'} title="Re-fetch the website's og:image used as this card's background">
+                  {heroChecking?'Checking...':heroImage?'Re-check image':'Retry image'}
+                </DashPill>
               )}
             </div>
           </div>
@@ -1197,172 +1312,117 @@ function ClientDashboard({client,data,setData,setTab}){
             ):(
               <div className="h-full min-h-[260px] flex flex-col items-center justify-center text-center p-6 bg-warm-sand/90">
                 <span className="material-symbols-outlined text-3xl text-muted-stone mb-2">map</span>
-                <p className="text-sm text-muted-stone">No rank map yet</p>
-                {setTab&&<button onClick={()=>setTab('rankings')} className="text-xs text-brand hover:underline mt-1">Generate one in Rankings</button>}
+                <p className="text-sm text-muted-stone mb-3">No rank map yet</p>
+                {setTab&&<DashPill onClick={()=>setTab('rankings')} icon="add">Generate one in Rankings</DashPill>}
               </div>
             )}
           </div>
         </div>
       </div>
 
-      {/* Top-line stats — same icon-chip bento pattern + brand-accent hero
-          card as AllClientsOverview's stat row, for visual consistency
-          across the two dashboards. */}
+      {/* KPI row — the reference's stat-tile row: label top-left, circular
+          action top-right, oversized number, delta/context line. Exactly one
+          tile is filled with brand colour, as in the reference; that single
+          contrast is what makes the row read as a hierarchy rather than three
+          equal boxes. */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div className="bg-brand stitch-hover-lift p-6 rounded-[24px] flex flex-col justify-between min-h-[150px] text-white shadow-xl shadow-brand/20">
-          <div className="bg-white/20 p-3 rounded-xl w-fit"><span className="material-symbols-outlined text-white">visibility</span></div>
-          <div className="mt-4">
-            <p className="text-[11px] font-semibold opacity-80 uppercase tracking-widest mb-1">Market Visibility</p>
-            {avgSolv!=null?(
-              <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="text-3xl font-bold">{avgSolv.toFixed(1)}%</h3>
-                {solvChangePct!=null&&Math.abs(solvChangePct)>=0.1&&(
-                  <span className="text-xs font-bold flex items-center gap-0.5 bg-white/20 px-1.5 py-0.5 rounded-full">
-                    <span className="material-symbols-outlined text-[14px]">{solvChangePct>0?'arrow_upward':'arrow_downward'}</span>{Math.abs(solvChangePct).toFixed(1)}%
-                  </span>
-                )}
-              </div>
-            ):<h3 className="text-3xl font-bold opacity-60">—</h3>}
-            <p className="text-[11px] opacity-70 mt-1">Share of Local Voice across {latestByKeyword.length} keyword{latestByKeyword.length!==1?'s':''}</p>
-          </div>
-        </div>
-        <div className="stitch-glass-card stitch-hover-lift p-6 rounded-[24px] flex flex-col justify-between min-h-[150px]">
-          <div className="bg-brand/10 p-3 rounded-xl w-fit"><span className="material-symbols-outlined text-brand">social_leaderboard</span></div>
-          <div className="mt-4">
-            <p className="text-[11px] font-semibold text-muted-stone uppercase tracking-widest mb-1">Avg. Rank</p>
-            <h3 className="text-3xl font-bold text-brand-dark">{avgLocalRank!=null?avgLocalRank.toFixed(1):'—'}</h3>
-            <p className="text-[11px] text-muted-stone mt-1">Average local pack position</p>
-          </div>
-        </div>
-        <div className="stitch-glass-card stitch-hover-lift p-6 rounded-[24px] flex flex-col justify-between min-h-[150px]">
-          <div className="bg-brand/10 p-3 rounded-xl w-fit"><span className="material-symbols-outlined text-brand">search</span></div>
-          <div className="mt-4">
-            <p className="text-[11px] font-semibold text-muted-stone uppercase tracking-widest mb-1">Organic Rankings</p>
-            {c.gscSummary?(
-              <>
-                <h3 className="text-3xl font-bold text-brand-dark">#{c.gscSummary.avgPosition.toFixed(1)}</h3>
-                <p className="text-[11px] text-muted-stone mt-1">Avg. Search Console position · as of {fmt(c.gscSummary.fetchedAt)}</p>
-              </>
-            ):(
-              <>
-                <h3 className="text-3xl font-bold text-muted-stone">—</h3>
-                {setTab&&<button onClick={()=>setTab('analytics')} className="text-xs text-brand hover:underline mt-1">Connect Search Console</button>}
-              </>
-            )}
-          </div>
-        </div>
+        <DashStatTile filled label="Market Visibility"
+          value={avgSolv!=null?avgSolv.toFixed(1)+'%':'—'}
+          delta={solvChangePct!=null&&Math.abs(solvChangePct)>=0.1?Math.abs(solvChangePct).toFixed(1)+'%':null}
+          deltaDirection={solvChangePct>0?'up':'down'}
+          context={`Share of Local Voice across ${latestByKeyword.length} keyword${latestByKeyword.length!==1?'s':''}`}
+          onAction={setTab?()=>setTab('rankings'):null} actionTitle="Open Rankings"/>
+        <DashStatTile label="Avg. Rank"
+          value={avgLocalRank!=null?avgLocalRank.toFixed(1):'—'}
+          context="Average local pack position"
+          onAction={setTab?()=>setTab('rankings'):null} actionTitle="Open Rankings"/>
+        <DashStatTile label="Organic Rankings"
+          value={c.gscSummary?'#'+c.gscSummary.avgPosition.toFixed(1):'—'}
+          context={c.gscSummary?`Avg. Search Console position · as of ${fmt(c.gscSummary.fetchedAt)}`:'Search Console not connected'}
+          onAction={setTab?()=>setTab('analytics'):null} actionTitle="Open Analytics"/>
       </div>
 
       {/* Website + Analytics + Leads */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="stitch-glass-card rounded-[24px] p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-bold text-brand-dark">Website</h3>
-            {setTab&&<button onClick={()=>setTab('analytics')} className="text-xs text-brand hover:underline">View Details</button>}
-          </div>
+        <DashCard title="Website" action={setTab&&<DashPill onClick={()=>setTab('analytics')} icon="north_east">Details</DashPill>}>
           {c.website?(
-            <div className="flex items-center gap-3 mb-4">
-              <span className="material-symbols-outlined text-2xl text-brand flex-shrink-0">language</span>
-              <a href={c.website.startsWith('http')?c.website:'https://'+c.website} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-brand-dark hover:underline truncate">{c.website}</a>
-            </div>
+            <a href={c.website.startsWith('http')?c.website:'https://'+c.website} target="_blank" rel="noopener noreferrer" className="flex items-center gap-3 mb-4 group">
+              <span className="flex-shrink-0 w-9 h-9 rounded-xl bg-brand-light flex items-center justify-center"><span className="material-symbols-outlined text-brand text-[19px]">language</span></span>
+              <span className="text-sm font-semibold text-brand-dark group-hover:underline truncate">{c.website}</span>
+            </a>
           ):<p className="text-sm text-muted-stone mb-4">No website on file</p>}
           <div className="grid grid-cols-2 gap-3">
-            <div className="bg-black/[0.03] rounded-xl p-4 flex items-center gap-3 relative">
+            <MiniTile label={pageSpeedScore!=null?'PageSpeed (Mobile)':'PageSpeed'}>
               {pageSpeedScore!=null?(
-                <>
-                  <ScoreRing value={pageSpeedScore} size={56} label=""/>
-                  <div>
-                    <p className="text-xs text-muted-stone">PageSpeed (Mobile)</p>
-                    {c.pageSpeed?.lastRun&&<p className="text-[11px] text-muted-stone">Last run {fmt(c.pageSpeed.lastRun)}</p>}
-                  </div>
-                </>
-              ):(
-                <div>
-                  <p className="text-xs text-muted-stone mb-1">PageSpeed</p>
-                  {setTab&&<button onClick={()=>setTab('analytics')} className="text-xs text-brand hover:underline">Run a test</button>}
+                <div className="flex items-center gap-3">
+                  <ScoreRing value={pageSpeedScore} size={48} label=""/>
+                  {c.pageSpeed?.lastRun&&<p className="text-[11px] text-muted-stone">Last run<br/>{fmt(c.pageSpeed.lastRun)}</p>}
                 </div>
-              )}
-            </div>
-            <div className="bg-black/[0.03] rounded-xl p-4">
-              <p className="text-xs text-muted-stone mb-1">Last Crawl</p>
-              <p className="text-sm font-medium text-deep-obsidian/80">{lastCrawl?fmt(lastCrawl):'Not crawled yet'}</p>
-            </div>
-            <div className="bg-black/[0.03] rounded-xl p-4">
-              <p className="text-xs text-muted-stone mb-1">Scheduled Pages</p>
+              ):setTab&&<DashPill onClick={()=>setTab('analytics')}>Run a test</DashPill>}
+            </MiniTile>
+            <MiniTile label="Last Crawl">
+              <p className="text-sm font-semibold text-deep-obsidian/80">{lastCrawl?fmt(lastCrawl):'Not crawled yet'}</p>
+            </MiniTile>
+            <MiniTile label="Scheduled Pages">
               {!c.publishing?.repo?(
                 <>
-                  <p className="text-xl font-bold text-muted-stone">—</p>
-                  {setTab&&<button onClick={()=>setTab('settings')} className="text-[11px] text-brand hover:underline">Connect GitHub</button>}
+                  <p className="text-2xl font-bold text-muted-stone leading-none mb-1">—</p>
+                  {setTab&&<DashPill onClick={()=>setTab('settings')}>Connect GitHub</DashPill>}
                 </>
               ):ghSchedule?.error?(
                 <p className="text-xs text-red-500" title={ghSchedule.error}>Error loading</p>
               ):ghTotalPages==null?(
-                <p className="text-xl font-bold text-muted-stone">…</p>
+                <p className="text-2xl font-bold text-muted-stone leading-none">…</p>
               ):(
-                <p className="text-xl font-bold text-brand-dark">{ghScheduledPages}</p>
+                <p className="text-2xl font-bold text-brand-dark leading-none">{ghScheduledPages}</p>
               )}
-            </div>
-            <div className="bg-black/[0.03] rounded-xl p-4">
-              <p className="text-xs text-muted-stone mb-1">Generated Pages</p>
+            </MiniTile>
+            <MiniTile label="Generated Pages">
               {!c.publishing?.repo?(
-                <p className="text-xl font-bold text-muted-stone">—</p>
+                <p className="text-2xl font-bold text-muted-stone leading-none">—</p>
               ):ghSchedule?.error?(
                 <p className="text-xs text-red-500" title={ghSchedule.error}>Error loading</p>
               ):ghTotalPages==null?(
-                <p className="text-xl font-bold text-muted-stone">…</p>
+                <p className="text-2xl font-bold text-muted-stone leading-none">…</p>
               ):(
-                <p className="text-xl font-bold text-brand-dark">{ghTotalPages}</p>
+                <p className="text-2xl font-bold text-brand-dark leading-none">{ghTotalPages}</p>
               )}
-            </div>
+            </MiniTile>
           </div>
-        </div>
+        </DashCard>
 
         <GBPCallsCard client={c} setData={setData} setTab={setTab}/>
 
         <GHLLeadsCard client={c} setData={setData} setTab={setTab}/>
       </div>
 
-      {/* Local + Organic keywords */}
+      {/* Local + Organic keywords — the reference's list-card shape: tinted
+          icon, bold title, muted sub-line, value pill on the right. The pill
+          stays NEUTRAL rather than green/amber: the reference's colours map to
+          real statuses, and there's no threshold here that would make a
+          "good/bad" colour honest. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div className="stitch-glass-card rounded-[24px] p-6">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-lg font-bold text-brand-dark">Local Keywords</h3>
-            {setTab&&<button onClick={()=>setTab('rankings')} className="text-xs text-brand hover:underline">View Details</button>}
-          </div>
+        <DashCard title="Local Keywords" action={setTab&&<DashPill onClick={()=>setTab('rankings')} icon="north_east">Details</DashPill>}>
           {keywordGroups.length===0&&<p className="text-sm text-muted-stone">No rank map data yet</p>}
-          <div className="space-y-1">
-            {keywordGroups.slice(0,6).map(g=>{
-              const latest=g.snapshots[0];
-              const solvVal=typeof latest.solv==='number'?latest.solv:parseSolv(latest.solv);
-              return(
-                <div key={g.keyword} className="flex items-center justify-between py-2 border-b border-glass-border last:border-0 gap-2">
-                  <span className="text-sm font-medium text-deep-obsidian/80 truncate">{g.keyword}</span>
-                  <div className="flex items-center gap-3 flex-shrink-0 text-xs text-muted-stone">
-                    <span>Visibility: {solvVal!=null?solvVal.toFixed(1)+'%':'—'}</span>
-                    <span>Avg Rank: {latest.avgRank||'—'}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
+          {keywordGroups.slice(0,6).map(g=>{
+            const latest=g.snapshots[0];
+            const solvVal=typeof latest.solv==='number'?latest.solv:parseSolv(latest.solv);
+            return(
+              <DashListRow key={g.keyword} icon="location_on" title={g.keyword}
+                subtitle={`Avg. rank ${latest.avgRank||'—'}`}
+                right={<StatusPill tone="brand">{solvVal!=null?solvVal.toFixed(1)+'%':'—'}</StatusPill>}/>
+            );
+          })}
+        </DashCard>
 
-        <div className="stitch-glass-card rounded-[24px] p-6">
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-lg font-bold text-brand-dark">Organic Search Keywords</h3>
-            {setTab&&<button onClick={()=>setTab('analytics')} className="text-xs text-brand hover:underline">Full List</button>}
-          </div>
+        <DashCard title="Organic Search Keywords" action={setTab&&<DashPill onClick={()=>setTab('analytics')} icon="north_east">Full list</DashPill>}>
           {!c.gscSummary&&<p className="text-sm text-muted-stone">Connect Search Console in Analytics to see this.</p>}
           {c.gscSummary&&(c.gscSummary.topQueries||[]).length===0&&<p className="text-sm text-muted-stone">No query data yet.</p>}
-          <div className="space-y-1">
-            {(c.gscSummary?.topQueries||[]).map((q,i)=>(
-              <div key={i} className="flex items-center justify-between py-2 border-b border-glass-border last:border-0 gap-2">
-                <span className="text-sm font-medium text-deep-obsidian/80 truncate">{q.query}</span>
-                <span className="text-xs text-muted-stone flex-shrink-0">#{q.position.toFixed(1)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+          {(c.gscSummary?.topQueries||[]).map((q,i)=>(
+            <DashListRow key={i} icon="search" title={q.query}
+              right={<StatusPill>#{q.position.toFixed(1)}</StatusPill>}/>
+          ))}
+        </DashCard>
       </div>
     </div>
   );
