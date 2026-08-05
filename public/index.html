@@ -8527,7 +8527,15 @@ async function callContentAPI(systemPrompt, userPrompt, apiKey, maxTokens){
   });
   const data = await resp.json();
   if(data.error) throw new Error(data.error.message);
-  return data.content[0].text;
+  // Find the TEXT block rather than assuming content[0] is one. On
+  // claude-opus-4 it always was; claude-opus-5 thinks by default, so the
+  // response leads with a `thinking` block and content[0].text is undefined —
+  // which returned undefined from here and blew up in every caller
+  // ("Cannot read properties of undefined (reading 'match')"). Caught on a
+  // real run against production, 2026-08-04.
+  const block = (data.content||[]).find(b=>b && b.type==='text' && typeof b.text==='string');
+  if(!block) throw new Error('The model returned no text (stop reason: '+(data.stop_reason||'unknown')+'). Try again.');
+  return block.text;
 }
 
 // ─── GBP Tab Component ───
