@@ -8561,7 +8561,7 @@ const GBP_EMOJI_RE=/[\p{Extended_Pictographic}\u{FE0F}\u{1F3FB}-\u{1F3FF}]/u;
 const GBP_URL_RE=/\bhttps?:\/\/|\bwww\.[a-z0-9-]|\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.(?:com|net|org|co|io|us|biz|info|shop|services)\b/i;
 const GBP_PHONE_RE=/(?:\+?1[\s.\-]?)?\(?\d{3}\)?[\s.\-]?\d{3}[\s.\-]?\d{4}/;
 const GBP_CAPS_ALLOWED=new Set(['HVAC','LLC','INC','USA','DIY','EPA','NATE','HEPA','PVC','CPVC','LED','GFCI','SEER','BTU','AC','TV','SUV','ADA','OSHA','FAQ','URL','API','PDF']);
-function validateGbpPost({text,cta,ctaUrl,clientWebsite,offerConfirmed}){
+function validateGbpPost({text,cta,ctaUrl,clientWebsite,offerConfirmed,ctaUrlNeedsReview}){
   const blocks=[],warnings=[];
   const t=(text||'').trim();
   if(!t)return{blocks:[{code:'empty',message:'The post is empty.'}],warnings};
@@ -8583,6 +8583,9 @@ function validateGbpPost({text,cta,ctaUrl,clientWebsite,offerConfirmed}){
       }catch(e){blocks.push({code:'cta_unparseable',message:"The button link isn't a valid web address."})}
     }
   }else if(cta&&cta!=='CALL')blocks.push({code:'cta_missing_url',message:`The "${cta}" button needs a link.`});
+  // Mirror of CTA_NEEDS_SPECIFIC_PAGE — a valid https link to the wrong page
+  // passes every other check and still fails the customer.
+  if((cta==='BOOK'||cta==='ORDER')&&ctaUrlNeedsReview)blocks.push({code:'cta_url_unreviewed',message:`The "${cta}" link was filled in automatically and points at the site's front page. Check it opens the actual ${cta==='ORDER'?'order':'booking'} page.`});
   const caps=[...new Set((t.match(/\b[A-Z]{3,}\b/g)||[]).filter(w=>!GBP_CAPS_ALLOWED.has(w)))];
   if(caps.length)warnings.push({code:'all_caps',message:`Shouty capitals: ${caps.slice(0,4).join(', ')}.`});
   return{blocks,warnings};
@@ -8665,14 +8668,27 @@ Rules:
       const parsed=JSON.parse(match[0]);
       if(!Array.isArray(parsed)||!parsed.length)throw new Error('No posts came back. Try again.');
       const now=new Date().toISOString();
-      const fresh=parsed.filter(p=>p&&typeof p.text==='string'&&p.text.trim()).map((p,i)=>({
-        id:uid(),
-        text:String(p.text).trim(),
-        cta:GBP_CTAS.some(c=>c.value===p.cta)?p.cta:'LEARN_MORE',
-        topic:String(p.topic||'').trim(),
-        createdAt:now,
-        usedAt:null,
-      }));
+      // The model picks a CTA type but never a URL, so every non-CALL post was
+      // arriving hard-blocked ("the BOOK button needs a link") — about half of
+      // them. Default to the client's site so the post is usable, and flag
+      // Book/Order for review: those promise a booking or order page, and the
+      // homepage is a valid link to the wrong destination.
+      const site=(client.website||'').trim();
+      const siteUrl=site?(site.startsWith('http')?site:'https://'+site):'';
+      const fresh=parsed.filter(p=>p&&typeof p.text==='string'&&p.text.trim()).map((p,i)=>{
+        const cta=GBP_CTAS.some(c=>c.value===p.cta)?p.cta:'LEARN_MORE';
+        const needsUrl=cta!=='CALL';
+        return{
+          id:uid(),
+          text:String(p.text).trim(),
+          cta,
+          ctaUrl:needsUrl?siteUrl:'',
+          ctaUrlNeedsReview:needsUrl&&!!siteUrl&&(cta==='BOOK'||cta==='ORDER'),
+          topic:String(p.topic||'').trim(),
+          createdAt:now,
+          usedAt:null,
+        };
+      });
       if(!fresh.length)throw new Error('The posts that came back were empty. Try again.');
       // Newest first, and never discard what's already saved — a second
       // generation adds to the library rather than replacing it.
@@ -8771,7 +8787,7 @@ Rules:
           const len=p.text.length;
           const over=len>GBP_POST_MAX;
           const longish=!over&&len>GBP_POST_IDEAL;
-          const v=validateGbpPost({text:p.text,cta:p.cta,ctaUrl:p.ctaUrl,clientWebsite:client.website,offerConfirmed:p.offerConfirmed});
+          const v=validateGbpPost({text:p.text,cta:p.cta,ctaUrl:p.ctaUrl,clientWebsite:client.website,offerConfirmed:p.offerConfirmed,ctaUrlNeedsReview:p.ctaUrlNeedsReview});
           const offerish=GBP_OFFER_RE.test(p.text||'');
           return(
             <div key={p.id} className={`border rounded-2xl p-3 ${p.usedAt?'border-glass-border bg-black/[0.02] opacity-60':'border-glass-border'}`}>
@@ -8788,6 +8804,20 @@ Rules:
                 </select>
               </div>
               <textarea value={p.text} onChange={e=>updatePost(p.id,{text:e.target.value})} rows="4" className={`w-full px-3 py-2 text-sm border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none ${v.blocks.length?'border-red-300':'border-glass-border'}`}/>
+
+              {p.cta!=='CALL'&&(
+                <div className="mt-2">
+                  <label className="text-[11px] text-muted-stone">Button link</label>
+                  <input value={p.ctaUrl||''} onChange={e=>updatePost(p.id,{ctaUrl:e.target.value,ctaUrlNeedsReview:false})}
+                    placeholder="https://..." className={`touch-target w-full mt-1 px-3 py-2 text-sm border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none ${p.ctaUrlNeedsReview?'border-amber-300 bg-amber-50/40':'border-glass-border'}`}/>
+                  {p.ctaUrlNeedsReview&&(
+                    <label className="flex items-start gap-2 text-xs mt-2 cursor-pointer bg-amber-50 rounded-xl px-3 py-2">
+                      <input type="checkbox" checked={false} onChange={()=>updatePost(p.id,{ctaUrlNeedsReview:false})} className="w-4 h-4 mt-0.5 accent-[#C45A30] flex-shrink-0"/>
+                      <span className="text-amber-800">Filled in automatically. I've checked this opens the actual {p.cta==='ORDER'?'order':'booking'} page, not just the homepage.</span>
+                    </label>
+                  )}
+                </div>
+              )}
 
               {v.blocks.map(b=>(
                 <div key={b.code} className="flex items-start gap-1.5 text-xs text-red-700 mt-2">

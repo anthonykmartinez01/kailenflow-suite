@@ -72,12 +72,19 @@ function sameSite(a: string, b: string): boolean {
  * Validates one post's content. `offerConfirmed` is the operator ticking
  * "I confirm this offer is real" — absent it, offer language blocks.
  */
+// CTAs whose label promises a specific destination rather than "somewhere on
+// the site". LEARN_MORE is deliberately absent — a homepage is a legitimate
+// place to learn more.
+const CTA_NEEDS_SPECIFIC_PAGE = new Set(["BOOK", "ORDER"]);
+
 export function validatePostContent(input: {
   text: string;
   cta?: string | null;
   ctaUrl?: string | null;
   clientWebsite?: string | null;
   offerConfirmed?: boolean;
+  /** True while a generated CTA link still points at the auto-filled default. */
+  ctaUrlNeedsReview?: boolean;
 }): Verdict {
   const blocks: Finding[] = [];
   const warnings: Finding[] = [];
@@ -142,6 +149,19 @@ export function validatePostContent(input: {
     }
   } else if (input.cta && input.cta !== "CALL") {
     blocks.push({ code: "cta_missing_url", message: `The "${input.cta}" button needs a link.` });
+  }
+
+  // "Book" and "Order" promise a specific destination — a booking form, an
+  // order page. Defaulting them to the homepage produces a link that is
+  // perfectly valid (https, resolves, right domain) and still wrong for the
+  // customer, who taps Book and lands on a marketing page. Validity checks
+  // cannot catch that, so the generated default is marked for review and a
+  // person has to confirm the destination before it can publish.
+  if (CTA_NEEDS_SPECIFIC_PAGE.has(input.cta || "") && input.ctaUrlNeedsReview) {
+    blocks.push({
+      code: "cta_url_unreviewed",
+      message: `The "${input.cta}" link was filled in automatically and points at the site's front page. Check it opens the actual ${input.cta === "ORDER" ? "order" : "booking"} page.`,
+    });
   }
 
   const caps = (text.match(CAPS_RE) || []).filter((w) => !CAPS_ALLOWED.has(w));

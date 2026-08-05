@@ -96,6 +96,30 @@ t("CTA without a link blocks", codes(rules.validatePostContent({ ...base, cta: "
 t("CALL needs no link", codes(rules.validatePostContent({ ...base, cta: "CALL" })), []);
 t("multiple violations all reported", codes(rules.validatePostContent({ ...base, text: "🔥 Call 910-555-0142 or visit example.com #deal" })), ["emoji", "hashtag", "phone", "raw_url"]);
 
+console.log("\n=== CTA DESTINATION REVIEW ===");
+// A permit-everything baseline, so a content-level block can be shown to stop
+// the whole publish decision and not just the content check.
+const ok0 = () => ({
+  globalPublishEnabled: true, clientPublishEnabled: true,
+  storedLocationId: "847", resolvedLocationId: "847",
+  humanConfirmed: true, postsPublishedToday: 0, postsPublishedThisWeek: 0,
+  content: base,
+});
+const booked = { ...base, cta: "BOOK", ctaUrl: "https://anytimeairpros.com" };
+t("auto-filled BOOK link blocks until reviewed",
+  codes(rules.validatePostContent({ ...booked, ctaUrlNeedsReview: true })), ["cta_url_unreviewed"]);
+t("auto-filled ORDER link blocks until reviewed",
+  codes(rules.validatePostContent({ ...base, cta: "ORDER", ctaUrl: "https://anytimeairpros.com", ctaUrlNeedsReview: true })), ["cta_url_unreviewed"]);
+t("once reviewed, it publishes", codes(rules.validatePostContent({ ...booked, ctaUrlNeedsReview: false })), []);
+t("LEARN_MORE is not flagged — a homepage is a fine place to learn more",
+  codes(rules.validatePostContent({ ...base, cta: "LEARN_MORE", ctaUrl: "https://anytimeairpros.com", ctaUrlNeedsReview: true })), []);
+t("a hand-entered BOOK link is not flagged",
+  codes(rules.validatePostContent({ ...base, cta: "BOOK", ctaUrl: "https://anytimeairpros.com/schedule" })), []);
+t("review flag does not rescue an http link",
+  codes(rules.validatePostContent({ ...base, cta: "BOOK", ctaUrl: "http://anytimeairpros.com/book", ctaUrlNeedsReview: false })), ["cta_not_https"]);
+t("an unreviewed link still blocks publishing outright",
+  rules.canPublish(rules.evaluatePublish({ ...ok0(), content: { ...booked, ctaUrlNeedsReview: true } })), false);
+
 console.log("\n=== CONTENT: warnings (publish still allowed) ===");
 t("third-party CTA warns, does not block", warns(rules.validatePostContent({ ...base, cta: "BOOK", ctaUrl: "https://calendly.com/x" })), ["cta_third_party"]);
 t("third-party CTA produces no block", codes(rules.validatePostContent({ ...base, cta: "BOOK", ctaUrl: "https://calendly.com/x" })), []);
