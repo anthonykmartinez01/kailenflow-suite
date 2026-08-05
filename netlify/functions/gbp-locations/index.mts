@@ -69,7 +69,7 @@ export default async (req: Request, _ctx: Context) => {
       let pageToken = "";
       do {
         const url = `https://mybusinessbusinessinformation.googleapis.com/v1/${acct.name}/locations?readMask=name,title&pageSize=100${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ""}`;
-        const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        const r = await gbpRead(url, token);
         if (!r.ok) break;
         const b: any = await r.json().catch(() => ({}));
         for (const l of b.locations || []) locations.push({ id: l.name, title: l.title || l.name, account: acct.name });

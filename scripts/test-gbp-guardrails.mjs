@@ -161,27 +161,120 @@ function walk(dir, acc = []) {
   return acc;
 }
 
+// ─── The scan, v2 ────────────────────────────────────────────────────────
+// v1 inspected a window of text around each `fetch(` looking for a host
+// literal. That is blind to the normal way URLs are written — assembled from
+// variables — and it let a real bypass through in gbp-locations' pagination
+// loop, where the call site reads `fetch(url, ...)` and names no host at all.
+//
+// v2 works at FILE scope instead of call scope: if a file references a
+// Business Profile host anywhere, or is itself a gbp-* module, then every bare
+// `fetch(` in it is a violation regardless of how the URL was built. That is
+// deliberately over-inclusive — a backstop should err toward flagging, and the
+// fix (route through gbpRead) is one line.
+//
+// Escape hatch for a genuine non-Google fetch inside a gbp-* file — e.g. a
+// future CTA-link reachability check, which fetches the client's own website:
+// put `// gbp-scan-allow: <reason>` on the preceding line. Default is deny,
+// and the suppression forces a stated reason.
+const GBP_FILE_RE = /(?:^|\/)netlify\/(?:functions|shared)\/gbp-/;
+
+function scanSource(rel, src) {
+  const found = [];
+  const mentionsHost = GBP_HOSTS.some((h) => src.includes(h));
+  const isGbpModule = GBP_FILE_RE.test(rel);
+  if (!mentionsHost && !isGbpModule) return found;
+
+  const lines = src.split("\n");
+  const re = /\bfetch\s*\(/g;
+  let m;
+  while ((m = re.exec(src))) {
+    const line = src.slice(0, m.index).split("\n").length;
+    const prev = lines[line - 2] || "";
+    if (/gbp-scan-allow:/.test(prev)) continue;
+
+    // Flag unless the target is PROVABLY not a Business Profile URL. A plain
+    // string literal with no interpolation can be judged on its face; anything
+    // else — a variable, or a template with `${}` in it — cannot be, so it is
+    // flagged. That asymmetry is the whole point: the miss in gbp-locations
+    // was a template literal, and "I can't tell" has to mean "flag it".
+    const arg = src.slice(m.index + m[0].length, m.index + m[0].length + 400);
+    const literal = arg.match(/^\s*(['"`])([\s\S]*?)\1/);
+    let provablySafe = false;
+    if (literal) {
+      const body = literal[2];
+      // A relative path is same-origin by construction — it cannot reach
+      // google.com no matter what gets interpolated into the query string.
+      if (body.startsWith("/")) provablySafe = true;
+      else if (!body.includes("${") && !GBP_HOSTS.some((h) => body.includes(h))) provablySafe = true;
+    }
+    if (provablySafe) continue;
+
+    found.push(`${rel}:${line}`);
+  }
+  return found;
+}
+
 const offenders = [];
 for (const file of walk(REPO)) {
   const rel = file.replace(REPO, "").replace(/\\/g, "/");
   if (rel === GUARD_FILE) continue;
-  if (rel.startsWith("scripts/")) continue; // this test names the hosts on purpose
-  const src = readFileSync(file, "utf8");
-  // Every `fetch(` in the file: does its argument region mention a GBP host
-  // (literally, or via one of the host constants)?
+  if (rel.startsWith("scripts/")) continue; // fixtures + this file name hosts on purpose
+  offenders.push(...scanSource(rel, readFileSync(file, "utf8")));
+}
+t("no direct fetch() to a Business Profile host outside gbp-guard.mts", offenders, []);
+
+// ─── Prove the scan catches constructed URLs, not just literals ──────────
+const fx = (name) => {
+  const p = fileURLToPath(new URL(`fixtures/${name}`, import.meta.url));
+  return { rel: `fixtures/${name}`, src: readFileSync(p, "utf8") };
+};
+
+const interpolated = fx("bypass-interpolated.mts");
+const hostInConst = fx("bypass-host-in-const.mts");
+const compliant = fx("compliant.mts");
+
+t("flags a URL built by template interpolation (the miss that started this)",
+  scanSource(interpolated.rel, interpolated.src).length > 0, true);
+t("flags a host hidden in a const and assembled across functions",
+  scanSource(hostInConst.rel, hostInConst.src).length > 0, true);
+t("does NOT flag a constructed URL that goes through gbpRead",
+  scanSource(compliant.rel, compliant.src), []);
+
+// The v1 logic, kept verbatim, purely to demonstrate that the hole was real
+// rather than theoretical — this must MISS the interpolated fixture.
+function scanSourceV1(rel, src) {
+  const found = [];
   const re = /\bfetch\s*\(/g;
   let m;
   while ((m = re.exec(src))) {
-    const window = src.slice(m.index, m.index + 220);
-    const hitsHost = GBP_HOSTS.some((h) => window.includes(h)) ||
-      HOST_CONSTANTS.some((c) => new RegExp(`\\$\\{${c}\\}|\\b${c}\\b`).test(window));
-    if (hitsHost) {
-      const line = src.slice(0, m.index).split("\n").length;
-      offenders.push(`${rel}:${line}`);
-    }
+    const w = src.slice(m.index, m.index + 220);
+    const hits = GBP_HOSTS.some((h) => w.includes(h)) ||
+      HOST_CONSTANTS.some((c) => new RegExp(`\\$\\{${c}\\}|\\b${c}\\b`).test(w));
+    if (hits) found.push(`${rel}:${src.slice(0, m.index).split("\n").length}`);
   }
+  return found;
 }
-t("no direct fetch() to a Business Profile host outside gbp-guard.mts", offenders, []);
+t("the previous call-site scan MISSED it (the hole was real, not theoretical)",
+  scanSourceV1(interpolated.rel, interpolated.src), []);
+t("the previous call-site scan also missed the const-hidden variant",
+  scanSourceV1(hostInConst.rel, hostInConst.src), []);
+
+// Regression test against the REAL bug: take the shipped gbp-locations source
+// and put the bypass back exactly as it was, then confirm the scan catches it.
+// Fixtures prove the scan handles the shape; this proves it would have caught
+// the specific line that shipped.
+const LOCATIONS_REL = "netlify/functions/gbp-locations/index.mts";
+const locationsSrc = readFileSync(join(REPO, LOCATIONS_REL.replace(/\//g, "\\")), "utf8");
+t("gbp-locations is currently clean", scanSource(LOCATIONS_REL, locationsSrc), []);
+const reintroduced = locationsSrc.replace(
+  "const r = await gbpRead(url, token);",
+  "const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });"
+);
+t("...and re-introducing the exact bypass is caught",
+  scanSource(LOCATIONS_REL, reintroduced).length, 1);
+t("...which the previous scan would have let through",
+  scanSourceV1(LOCATIONS_REL, reintroduced), []);
 
 // And the headline case, stated plainly: the exact call that gets listings
 // suspended, refused by the shared helper.

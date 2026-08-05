@@ -4557,6 +4557,7 @@ function PagePublisherView({data,setData}){
     const endpoint=platform==='git_static'?'/api/page-publisher-connect-site':'/api/page-publisher-connect-manual-site';
     const payload=platform==='git_static'?{clientId,...form}:{clientId,domain:form.domain,manualUrls:manualUrlsText};
     try{
+      // gbp-scan-allow: `endpoint` is one of two same-origin /api/ paths chosen on the line above, never an external URL.
       const r=await fetch(endpoint,{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(payload)});
       const j=await r.json();
       if(!r.ok||j.error)setError(j.error||'Connect failed');
