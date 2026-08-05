@@ -96,6 +96,45 @@ t("CTA without a link blocks", codes(rules.validatePostContent({ ...base, cta: "
 t("CALL needs no link", codes(rules.validatePostContent({ ...base, cta: "CALL" })), []);
 t("multiple violations all reported", codes(rules.validatePostContent({ ...base, text: "🔥 Call 910-555-0142 or visit example.com #deal" })), ["emoji", "hashtag", "phone", "raw_url"]);
 
+console.log("\n=== CTA OFFERED ONLY WHEN A DESTINATION EXISTS ===");
+const noLinks = { website: "anytimeairpros.com" };
+const withBooking = { ...noLinks, bookingUrl: "https://anytimeairpros.com/schedule" };
+const withBoth = { ...withBooking, orderingUrl: "https://anytimeairpros.com/order" };
+
+t("no booking/ordering URL: only CALL and LEARN_MORE offered",
+  rules.allowedCtasFor(noLinks).sort(), ["CALL", "LEARN_MORE"]);
+t("booking URL on file: BOOK becomes available",
+  rules.allowedCtasFor(withBooking).sort(), ["BOOK", "CALL", "LEARN_MORE"]);
+t("both on file: all four available",
+  rules.allowedCtasFor(withBoth).sort(), ["BOOK", "CALL", "LEARN_MORE", "ORDER"]);
+t("whitespace-only URL does not unlock BOOK",
+  rules.allowedCtasFor({ ...noLinks, bookingUrl: "   " }).sort(), ["CALL", "LEARN_MORE"]);
+
+t("BOOK uses the booking URL and needs no review",
+  rules.ctaUrlFor("BOOK", withBooking), { url: "https://anytimeairpros.com/schedule", needsReview: false });
+t("ORDER uses the ordering URL and needs no review",
+  rules.ctaUrlFor("ORDER", withBoth), { url: "https://anytimeairpros.com/order", needsReview: false });
+t("LEARN_MORE uses the homepage, no review",
+  rules.ctaUrlFor("LEARN_MORE", noLinks), { url: "https://anytimeairpros.com", needsReview: false });
+t("CALL carries no link at all",
+  rules.ctaUrlFor("CALL", withBoth), { url: "", needsReview: false });
+t("safety net: hand-set BOOK without a booking URL falls back and needs review",
+  rules.ctaUrlFor("BOOK", noLinks), { url: "https://anytimeairpros.com", needsReview: true });
+t("bare domain is normalised to https",
+  rules.ctaUrlFor("LEARN_MORE", { website: "anytimeairpros.com" }).url, "https://anytimeairpros.com");
+
+// The point of the whole change: a generated batch for a client with no
+// booking URL must contain nothing that trips the review block.
+const generatedForNoLinks = rules.allowedCtasFor(noLinks).map((cta) => {
+  const link = rules.ctaUrlFor(cta, noLinks);
+  return rules.validatePostContent({
+    text: "Furnace smells dusty on the first cold night? That is usually burn-off.",
+    cta, ctaUrl: link.url, clientWebsite: noLinks.website, ctaUrlNeedsReview: link.needsReview,
+  });
+});
+t("every CTA offered to a client with no booking URL publishes clean",
+  generatedForNoLinks.flatMap((v) => v.blocks.map((b) => b.code)), []);
+
 console.log("\n=== CTA DESTINATION REVIEW ===");
 // A permit-everything baseline, so a content-level block can be shown to stop
 // the whole publish decision and not just the content check.

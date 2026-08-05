@@ -68,6 +68,58 @@ function sameSite(a: string, b: string): boolean {
   return tail(a) === tail(b);
 }
 
+export type ClientLinks = {
+  website?: string | null;
+  bookingUrl?: string | null;
+  orderingUrl?: string | null;
+};
+
+/**
+ * Which CTAs the generator may choose from for a given client.
+ *
+ * CALL and LEARN_MORE are always available: CALL needs no link at all, and a
+ * homepage is a legitimate destination for "learn more". BOOK and ORDER are
+ * offered ONLY when the client record holds a real booking / ordering URL,
+ * because otherwise every such post lands on the homepage and gets held for
+ * destination review. A block that fires on half of every batch stops being a
+ * block and becomes something the operator rubber-stamps — so the fix belongs
+ * at generation, not only at validation.
+ */
+export function allowedCtasFor(client: ClientLinks): string[] {
+  const out = ["CALL", "LEARN_MORE"];
+  if ((client.bookingUrl || "").trim()) out.push("BOOK");
+  if ((client.orderingUrl || "").trim()) out.push("ORDER");
+  return out;
+}
+
+/**
+ * The link a generated post should carry, and whether it still needs a human
+ * to confirm the destination.
+ *
+ * needsReview is true only in the fallback case — a BOOK/ORDER post with no
+ * matching URL on file, which `allowedCtasFor` should already prevent. It is
+ * kept as a safety net for hand-edited posts and for older posts generated
+ * before the client had those URLs stored.
+ */
+export function ctaUrlFor(cta: string, client: ClientLinks): { url: string; needsReview: boolean } {
+  const norm = (u?: string | null) => {
+    const s = (u || "").trim();
+    if (!s) return "";
+    return /^https?:\/\//i.test(s) ? s : `https://${s}`;
+  };
+  const site = norm(client.website);
+  if (cta === "CALL") return { url: "", needsReview: false };
+  if (cta === "BOOK") {
+    const booking = norm(client.bookingUrl);
+    return booking ? { url: booking, needsReview: false } : { url: site, needsReview: !!site };
+  }
+  if (cta === "ORDER") {
+    const ordering = norm(client.orderingUrl);
+    return ordering ? { url: ordering, needsReview: false } : { url: site, needsReview: !!site };
+  }
+  return { url: site, needsReview: false };
+}
+
 /**
  * Validates one post's content. `offerConfirmed` is the operator ticking
  * "I confirm this offer is real" — absent it, offer language blocks.
