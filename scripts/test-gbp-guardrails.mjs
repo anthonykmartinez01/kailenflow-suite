@@ -349,5 +349,23 @@ t("locations.patch (edit hours) throws", patchErr?.code, "gbp_forbidden_write");
 t("...and the error explains why", /suspended/i.test(patchErr?.message || ""), true);
 console.log(`\n      ${String(patchErr?.message || "").split("\n")[0]}`);
 
+console.log("\n=== STALE CONFIRMATIONS (composer wiring) ===");
+// Both of these were real bugs: the validation logic was correct and covered
+// by the tests above, but the composer's event handlers never invoked it, so
+// a confirmation outlived the thing it confirmed. Unit tests can't see a
+// wiring gap, so assert the source directly — same approach as the bypass
+// scan. If someone simplifies these handlers, this fails loudly.
+const composerSrc = readFileSync(join(REPO, "public\\index.html"), "utf8");
+
+const ctaHandler = composerSrc.match(/<select value=\{p\.cta\} onChange=\{([^}]*\}[^}]*\})/);
+t("changing the CTA re-derives the link",
+  !!ctaHandler && /gbpCtaUrlFor/.test(ctaHandler[1]), true);
+t("...and re-arms the destination review",
+  !!ctaHandler && /ctaUrlNeedsReview/.test(ctaHandler[1]), true);
+
+const textHandler = composerSrc.match(/<textarea value=\{p\.text\} onChange=\{([^}]*\}[^}]*\})/);
+t("editing the post text clears any offer confirmation",
+  !!textHandler && /offerConfirmed:false/.test(textHandler[1]), true);
+
 console.log(`\n${pass}/${pass + fail} passed`);
 process.exit(fail ? 1 : 0);

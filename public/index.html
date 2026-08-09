@@ -8829,11 +8829,21 @@ Rules:
                     {len} chars{over?` - over Google's ${GBP_POST_MAX} limit`:longish?' - may get cut off in Maps':''}
                   </span>
                 </div>
-                <select value={p.cta} onChange={e=>updatePost(p.id,{cta:e.target.value})} className="touch-target text-xs px-2 py-1 border border-glass-border rounded-xl bg-white/70 focus:ring-1 focus:ring-brand focus:outline-none">
+                {/* Changing the CTA must re-derive the link. Writing only
+                    `cta` left the previous URL in place — switching Learn more
+                    -> Book kept the homepage AND kept ctaUrlNeedsReview false,
+                    so a Book button pointing at a marketing page sailed
+                    through the very check meant to catch it. */}
+                <select value={p.cta} onChange={e=>{const cta=e.target.value;const link=gbpCtaUrlFor(cta,client);updatePost(p.id,{cta,ctaUrl:link.url,ctaUrlNeedsReview:link.needsReview})}} className="touch-target text-xs px-2 py-1 border border-glass-border rounded-xl bg-white/70 focus:ring-1 focus:ring-brand focus:outline-none">
                   {GBP_CTAS.map(c=><option key={c.value} value={c.value}>{c.label}</option>)}
                 </select>
               </div>
-              <textarea value={p.text} onChange={e=>updatePost(p.id,{text:e.target.value})} rows="4" className={`w-full px-3 py-2 text-sm border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none ${v.blocks.length?'border-red-300':'border-glass-border'}`}/>
+              {/* Editing the text clears any offer confirmation. Without this
+                  an operator could confirm "20% off", then edit it to "50% off
+                  plus a free system", and the stale tick would carry the new
+                  claim out unchecked. A confirmation has to belong to the text
+                  it was given for. */}
+              <textarea value={p.text} onChange={e=>updatePost(p.id,{text:e.target.value,offerConfirmed:false})} rows="4" className={`w-full px-3 py-2 text-sm border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none ${v.blocks.length?'border-red-300':'border-glass-border'}`}/>
 
               {p.cta!=='CALL'&&(
                 <div className="mt-2">
