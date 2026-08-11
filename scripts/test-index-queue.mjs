@@ -95,5 +95,31 @@ t("release + deferred always accounts for every candidate",
 t("no page is both released and deferred",
   decision.release.filter((p) => decision.deferred.includes(p)), []);
 
+console.log("\n=== WIRING: the cron must actually APPLY the decision ===");
+// The logic above can be perfect and the feature still do nothing if
+// publish-page-log doesn't use the result — exactly the failure mode that hit
+// the composer's CTA handler, where correct, well-tested validation was simply
+// never invoked. Unit tests cannot see a wiring gap, so assert the call site.
+const cron = readFileSync(join(REPO, "netlify/functions/publish-page-log/index.mts"), "utf8");
+
+t("cron imports the pacing module", /import \{[^}]*selectForSubmission[^}]*\} from ".*index-queue\.mts"/.test(cron), true);
+t("cron calls selectForSubmission", /selectForSubmission\(\{/.test(cron), true);
+t("...passing the client's own publishing config (so per-client caps apply)",
+  /selectForSubmission\(\{[\s\S]{0,200}publishing:\s*client\.publishing/.test(cron), true);
+t("...and its existing indexHistory (so the 24h count is real)",
+  /selectForSubmission\(\{[\s\S]{0,200}history/.test(cron), true);
+
+// The load-bearing line: only RELEASED pages may reach the submitter.
+t("only released pages are submitted",
+  /batchUrls\s*=\s*pageEntries\.filter\(\([^)]*\)\s*=>[^)]*\.released\)/.test(cron), true);
+// Window is generous because the branch carries a long explanatory comment
+// between the condition and the record it writes.
+t("a held-back page is recorded as queued, not as a failure",
+  /!released[\s\S]{0,900}queued:\s*true/.test(cron), true);
+t("...and carries no submittedAt, so it can't consume tomorrow's allowance",
+  !/queued:\s*true,[\s\S]{0,120}submittedAt/.test(cron), true);
+t("queued is cleared explicitly on release",
+  /queued:\s*false/.test(cron), true);
+
 console.log(`\n${pass}/${pass + fail} passed`);
 process.exit(fail ? 1 : 0);
