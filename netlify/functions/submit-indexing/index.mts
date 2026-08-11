@@ -1,6 +1,7 @@
 import type { Context, Config } from "@netlify/functions";
 import { isAuthed, unauthorized } from "../../shared/auth.mts";
-import { submitAndLog } from "../../shared/indexing.mts";
+import { submitAndLog, findGscPropertyForUrl } from "../../shared/indexing.mts";
+import { readAppData } from "../../shared/firestore-admin.mts";
 
 function json(o: any, status = 200) {
   return new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json" } });
@@ -26,7 +27,17 @@ export default async (req: Request, _ctx: Context) => {
   if (!pageUrl || !/^https?:\/\//i.test(pageUrl)) return json({ error: "A valid http(s) url is required" }, 400);
 
   const label = (body.label || pageUrl).toString().slice(0, 80);
-  const result = await submitAndLog(pageUrl, label, isAutomation ? "automation" : "manual");
+  // Same gate as publish-page-log's auto-submit path: the Indexing API only
+  // works if the calling account is verified for this exact site in Search
+  // Console (client.gscProperty is the app's record that's been done) —
+  // find it by matching the URL's host against a client's website, since
+  // this endpoint only gets a bare URL, not a client id.
+  let gscProperty: string | null = null;
+  try {
+    const data = await readAppData();
+    gscProperty = findGscPropertyForUrl(data.clients || [], pageUrl);
+  } catch { /* best-effort — proceed without it, submitToGoogle will just report not-connected */ }
+  const result = await submitAndLog(pageUrl, label, isAutomation ? "automation" : "manual", gscProperty);
   return json(result);
 };
 

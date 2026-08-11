@@ -7,12 +7,10 @@ import { dataForSeoHeaders } from "./dataforseo.mts";
 
 export interface GridPoint { lat: number; lng: number; row: number; col: number; }
 
-// Builds an N x N grid of {lat,lng} centered on (centerLat, centerLng),
-// clipped to a circle — NOT a full square. A plain square grid's corners
-// sit sqrt(2)x farther from center than its edges, which is visually a
-// much bigger/denser footprint than the diamond/circular grid every
-// comparable rank-tracking tool (Local Falcon, GridMySEO, etc.) produces.
-// Dropping the corner points also means fewer billed DataForSEO tasks.
+// Builds a FULL N x N square grid of {lat,lng} centered on (centerLat,
+// centerLng). (A circular-clipped variant existed briefly in 2026-07 but
+// the maps "came out messed up" — Anthony explicitly asked for the simple
+// square back. Every point is billed: N² DataForSEO tasks.)
 //
 // IMPORTANT: radiusMiles is the distance BETWEEN each adjacent grid point
 // (matches how "Radius" is defined in Local Falcon/GridMySEO), NOT the
@@ -29,12 +27,10 @@ export function buildGrid(centerLat: number, centerLng: number, gridSize: number
   const milesPerDegLng = 69.0 * Math.cos((centerLat * Math.PI) / 180);
   const step = radiusMiles; // distance between adjacent points
   const coverageRadius = gridSize > 1 ? radiusMiles * (gridSize - 1) / 2 : 0; // center-to-edge distance
-  const eps = 1e-9; // float slop so exact-boundary points (row/col at the very edge) aren't dropped
   for (let row = 0; row < gridSize; row++) {
     for (let col = 0; col < gridSize; col++) {
       const milesFromCenterLat = row * step - coverageRadius;
       const milesFromCenterLng = col * step - coverageRadius;
-      if (Math.hypot(milesFromCenterLat, milesFromCenterLng) > coverageRadius + eps) continue;
       points.push({
         lat: centerLat + milesFromCenterLat / milesPerDegLat,
         lng: centerLng + milesFromCenterLng / milesPerDegLng,
@@ -269,7 +265,11 @@ export async function pollHeatmapTasks(opts: {
       }
     }
   }
-  const COMPETITOR_GRID_LIMIT = 20; // see CompetitorStat.grid comment
+  // Per-point grids only for the top 8 (was 20): each competitor grid is
+  // ~3KB of taskId strings and the whole app lives in ONE 1MiB-capped
+  // Firestore document — 20-competitor grids on every map snapshot is what
+  // ran the doc out of space on 2026-07-14 and silently broke all saving.
+  const COMPETITOR_GRID_LIMIT = 8;
   const competitors: CompetitorStat[] | undefined = totalPoints > 0
     ? [...compAgg.entries()]
         .map(([compCid, v]) => ({
@@ -298,6 +298,14 @@ export async function pollHeatmapTasks(opts: {
     competitors,
   };
 }
+
+// pruneRankMapHistory / RANK_MAP_GRID_RETENTION lived here from 2026-07-14
+// through 2026-07-17, repeatedly tightened to fight the shared 1MiB
+// appData/main document filling up with rank-map grid data. REMOVED
+// 2026-07-17 — the structural fix (saveRankMapGrid/getRankMapGrid in
+// shared/firestore-admin.mts) moved that data into its own per-map document
+// entirely, so there's nothing left in appData/main that ever needs
+// trimming for space. Full rank map history is kept forever now.
 
 // Rolls up a completed grid's points into the same summary stats shape
 // client.rankMaps[] entries use (top3/top4to10/top11to20/top21plus/avgRank/solv).

@@ -62,3 +62,19 @@ export function parseOwnerRepo(repo: string): { owner: string; repoName: string 
   const m = (repo || "").match(/^([^/\s]+)\/([^/\s]+)$/);
   return m ? { owner: m[1], repoName: m[2] } : null;
 }
+
+// Surfaces whether the client's OWN scheduled-publish GitHub Action is
+// actually running — added 2026-07-20 alongside the indexing dashboard,
+// since "nothing published this run" and "the pipeline is silently broken"
+// used to look identical from the Suite's side. Latest run across ALL
+// workflows in the repo (not a specific filename) — client repos vary in
+// what they call the workflow file, and the daily rebuild is normally the
+// only thing running anyway.
+export async function fetchLatestWorkflowRun(owner: string, repoName: string, headers: HeadersInit): Promise<{ status: string; conclusion: string | null; ranAt: string; url: string } | { error: string }> {
+  const res = await fetch(`https://api.github.com/repos/${owner}/${repoName}/actions/runs?per_page=1`, { headers, cache: "no-store" });
+  if (!res.ok) return { error: `GitHub ${res.status}` };
+  const data = await res.json();
+  const run = data.workflow_runs?.[0];
+  if (!run) return { error: "No workflow runs found for this repo yet" };
+  return { status: run.status, conclusion: run.conclusion, ranAt: run.run_started_at, url: run.html_url };
+}

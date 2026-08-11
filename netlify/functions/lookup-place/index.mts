@@ -22,7 +22,12 @@ export default async (req: Request, _ctx: Context) => {
 
   const name: string = (body.name || "").trim();
   const address: string = (body.address || "").trim();
-  if (!name) return json({ error: "name is required" }, 400);
+  // Optional raw search override — used by the Re-lookup picker's search box
+  // so a business whose Settings lack an address (name-only searches return
+  // same-name businesses nationwide) can still be found by typing e.g.
+  // "Anytime Heating & Air Providence Village TX".
+  const query: string = (body.query || "").trim();
+  if (!name && !query) return json({ error: "name is required" }, 400);
 
   const apiKey = Netlify.env.get("GOOGLE_PLACES_KEY");
   if (!apiKey) return json({ error: "GOOGLE_PLACES_KEY not configured on the server" }, 500);
@@ -35,19 +40,27 @@ export default async (req: Request, _ctx: Context) => {
         "X-Goog-Api-Key": apiKey,
         "X-Goog-FieldMask": "places.id,places.displayName,places.formattedAddress,places.location",
       },
-      body: JSON.stringify({ textQuery: `${name} ${address}`.trim() }),
+      body: JSON.stringify({ textQuery: query || `${name} ${address}`.trim() }),
     });
     const data = await res.json();
     if (!res.ok) return json({ error: data.error?.message || `Places API ${res.status}` }, 502);
-    const place = data.places?.[0];
+    const places: any[] = data.places || [];
+    const place = places[0];
     if (!place) return json({ error: "No matching business found. Try adding more of the address." }, 404);
 
+    const toCandidate = (p: any) => ({
+      placeId: p.id,
+      name: p.displayName?.text || name,
+      address: p.formattedAddress || address,
+      lat: p.location?.latitude,
+      lng: p.location?.longitude,
+    });
+
     return json({
-      placeId: place.id,
-      name: place.displayName?.text || name,
-      address: place.formattedAddress || address,
-      lat: place.location?.latitude,
-      lng: place.location?.longitude,
+      ...toCandidate(place),
+      // Up to 8 alternates for the Re-lookup dropdown — the initial "Find
+      // Business on Google" flow ignores this and just uses the top match.
+      candidates: places.slice(0, 8).map(toCandidate),
     });
   } catch (e: any) {
     return json({ error: String(e?.message || e) }, 500);

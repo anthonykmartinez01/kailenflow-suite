@@ -8927,124 +8927,6 @@ Rules:
   );
 }
 
-// ─── Market Finder (task #55) ───
-// Which nearby cities this client should expand into next. Candidate cities
-// are the ones where the client's trade actually operates — derived from the
-// addresses of businesses Google returns, not a static town list — so a town
-// with no competitors in that trade never shows up as a "market".
-//
-// The verdict labels are coarse judgements over the numbers displayed beside
-// them. That is deliberate: every row shows its own competitor count, top
-// review count and website gap, so the label can be checked rather than
-// trusted. Nothing here measures search volume, and the footer says so.
-function MarketFinder({client,setData}){
-  const [loading,setLoading]=useState(false);
-  const [error,setError]=useState('');
-  const [res,setRes]=useState(client.marketFinder||null);
-  const [radius,setRadius]=useState(30);
-
-  const trade=client.primaryCategory||'';
-  const ready=!!(trade&&client.geo&&client.city);
-
-  // A city already covered by a rank map is presumably already being worked;
-  // flagging it stops the list recommending what's in flight. Substring match
-  // on the whole keyword, NOT a word set — splitting into words meant a
-  // two-word city ("Providence Village") could never match its own keyword.
-  const trackedKeywords=useMemo(()=>
-    (client.rankMaps||[]).map(m=>(m.keyword||'').toLowerCase()).filter(Boolean)
-  ,[client.rankMaps]);
-  const alreadyTracked=(city)=>{
-    const c=(city||'').toLowerCase().trim();
-    return !!c&&trackedKeywords.some(kw=>kw.includes(c));
-  };
-
-  const run=async()=>{
-    if(!ready)return;
-    setLoading(true);setError('');
-    try{
-      const r=await fetch('/api/market-finder',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),
-        body:JSON.stringify({trade,city:client.city,state:client.state,lat:client.geo.lat,lng:client.geo.lng,radiusMiles:radius})});
-      const j=await r.json();
-      if(!r.ok||j.error){setError(j.error||'Search failed.');setLoading(false);return}
-      setRes(j);
-      if(setData){
-        setData(prev=>{const nd={...prev,clients:prev.clients.map(c=>c.id===client.id?{...c,marketFinder:{...j,fetchedAt:Date.now()}}:c)};saveData(nd);return nd});
-      }
-    }catch(e){setError('Network error running the market search.')}
-    setLoading(false);
-  };
-
-  const TONE={winnable:'good',contested:'warn',hard:'neutral'};
-  const LABEL={winnable:'Winnable',contested:'Contested',hard:'Hard'};
-
-  return(
-    <div className="fade-in font-manrope space-y-4">
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div>
-          <h3 className="text-xl font-bold text-brand-dark">Market Finder</h3>
-          <p className="text-sm text-muted-stone">Nearby cities {client.name} could expand into, ranked by how contested they look.</p>
-        </div>
-        <div className="flex items-end gap-2 flex-wrap">
-          <div>
-            <label className="text-xs text-muted-stone">Within (miles)</label>
-            <input type="number" min="5" max="60" value={radius} onChange={e=>setRadius(Math.max(5,Math.min(60,Number(e.target.value)||30)))}
-              className="touch-target w-24 mt-1 px-3 py-2 border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none block"/>
-          </div>
-          <DashPill tone="brand" onClick={run} icon={loading?'hourglass_top':'travel_explore'}>{loading?'Searching...':res?'Search again':'Find markets'}</DashPill>
-        </div>
-      </div>
-
-      {!ready&&(
-        <DashCard title="Not enough on file yet">
-          <p className="text-sm text-muted-stone">
-            {!trade?'Set this client\'s Primary Category in Settings — that\'s the trade we search for.':'This client has no map location yet. Use "Find Business on Google" in Rankings first.'}
-          </p>
-        </DashCard>
-      )}
-      {error&&<div className="rounded-xl p-3 text-sm bg-red-50 text-red-700">{error}</div>}
-
-      {res&&(
-        <>
-          <p className="text-[11px] text-muted-stone">
-            Scanned {res.businessesScanned} {res.trade} listings within {res.radiusMiles} miles of {res.homeCity}{res.homeState?', '+res.homeState:''}
-            {client.marketFinder?.fetchedAt?` · as of ${fmt(client.marketFinder.fetchedAt)}`:''}
-          </p>
-          {res.markets.length===0&&(
-            <DashCard title="No separate markets found">
-              <p className="text-sm text-muted-stone">Every {res.trade} nearby is in {res.homeCity} itself. Try a wider radius.</p>
-            </DashCard>
-          )}
-          <div className="space-y-3">
-            {res.markets.map(m=>{
-              const tracked=alreadyTracked(m.city);
-              return(
-                <DashCard key={m.city+m.state} title={`${m.city}, ${m.state}`}
-                  action={<div className="flex items-center gap-2 flex-wrap">
-                    {tracked&&<StatusPill>Already in a rank map</StatusPill>}
-                    <StatusPill tone={TONE[m.verdict]}>{LABEL[m.verdict]}</StatusPill>
-                  </div>}>
-                  <p className="text-sm text-deep-obsidian/80">{m.why}</p>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
-                    <MiniTile label="Competitors"><p className="text-2xl font-bold text-brand-dark leading-none">{m.competitorCount}</p></MiniTile>
-                    <MiniTile label="Strongest"><p className="text-2xl font-bold text-brand-dark leading-none">{m.topReviews}</p><p className="text-[11px] text-muted-stone mt-1">reviews</p></MiniTile>
-                    <MiniTile label="Average"><p className="text-2xl font-bold text-brand-dark leading-none">{m.avgReviews}</p><p className="text-[11px] text-muted-stone mt-1">reviews</p></MiniTile>
-                    <MiniTile label="No website"><p className="text-2xl font-bold text-brand-dark leading-none">{m.pctNoWebsite}%</p></MiniTile>
-                  </div>
-                  <div className="mt-3 text-xs text-muted-stone space-y-1">
-                    <p><b className="text-deep-obsidian/70">Suggested page:</b> <span className="font-mono">{m.suggestedPage}</span></p>
-                    <p><b className="text-deep-obsidian/70">Suggested keyword:</b> {m.suggestedKeyword} <span className="text-muted-stone/70">· {m.distanceMiles} mi from {res.homeCity}</span></p>
-                  </div>
-                </DashCard>
-              );
-            })}
-          </div>
-          <p className="text-[11px] text-muted-stone">{res.note}</p>
-        </>
-      )}
-    </div>
-  );
-}
-
 function GBPTab({client,setData,data}){
   const [apiKey]=useState(()=>localStorage.getItem('kf_content_apikey')||'');
   const cc=client.contentConfig||{};
@@ -11375,7 +11257,7 @@ function AuthenticatedApp(){
   // this now. Component + data + render line below are left intact so it's a one-line
   // re-add (just put {key:'content',label:'Content',icon:'✏'} back in this array) if
   // he wants it back later. Nothing was deleted.
-  const tabs=[{key:'dashboard',label:'Dashboard',icon:'dashboard'},{key:'tasks',label:'Tasks',icon:'task_alt'},{key:'rankings',label:'Rankings',icon:'trending_up'},{key:'analytics',label:'Analytics',icon:'monitoring'},{key:'indexing',label:'Indexing',icon:'travel_explore'},{key:'gbp',label:'GBP',icon:'location_on'},{key:'markets',label:'Markets',icon:'travel_explore'},{key:'settings',label:'Settings',icon:'settings'},{key:'reports',label:'Reports',icon:'description'}];
+  const tabs=[{key:'dashboard',label:'Dashboard',icon:'dashboard'},{key:'tasks',label:'Tasks',icon:'task_alt'},{key:'rankings',label:'Rankings',icon:'trending_up'},{key:'analytics',label:'Analytics',icon:'monitoring'},{key:'indexing',label:'Indexing',icon:'travel_explore'},{key:'gbp',label:'GBP',icon:'location_on'},{key:'settings',label:'Settings',icon:'settings'},{key:'reports',label:'Reports',icon:'description'}];
 
   useEffect(()=>{if(!data.clients.find(c=>c.id===activeClient)&&data.clients.length>0)setActiveClient(data.clients[0].id)},[data.clients,activeClient]);
 
@@ -11439,7 +11321,6 @@ function AuthenticatedApp(){
               {tab==='analytics'&&<AnalyticsTab client={client} setData={setData} data={data} key={'analytics-'+client.id}/>}
               {tab==='indexing'&&<ClientIndexingTab client={client} setData={setData} data={data} key={'indexing-'+client.id}/>}
               {tab==='gbp'&&<GBPTab client={client} setData={setData} data={data} key={'gbp-'+client.id}/>}
-              {tab==='markets'&&<MarketFinder client={client} setData={setData} key={'markets-'+client.id}/>}
               {tab==='content'&&<ContentTab client={client} setData={setData} data={data} key={'content-'+client.id}/>}
               {tab==='settings'&&<SettingsTab client={client} setData={setData} key={'settings-'+client.id}/>}
               {tab==='reports'&&<ReportsTab data={data} setData={setData} initialClientId={client.id} key={'reports-'+client.id}/>}

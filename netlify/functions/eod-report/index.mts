@@ -174,13 +174,15 @@ async function ghlGet(path: string, token: string) {
   if (!r.ok) throw new Error(`GHL ${r.status}`);
   return r.json();
 }
-async function coldCallsCount(token: string, loc: string, todayStr: string, weekStartStr: string) {
-  // Count conversations whose latest activity is a call, both for TODAY and for
-  // THIS WEEK. Reads only the conversation LIST (not each conversation's
+async function coldCallsCount(token: string, loc: string, todayStr: string, weekStartStr: string, monthStartStr: string) {
+  // Count conversations whose latest activity is a call, for TODAY, THIS WEEK
+  // and THIS MONTH. Reads only the conversation LIST (not each conversation's
   // messages) — stable and rate-limit-safe. Conversations sort by last activity,
-  // so we page from newest until we pass the start of the week.
-  let today = 0, week = 0, startAfterDate = "", startAfter = "", pages = 0, done = false;
-  while (pages++ < 20 && !done) {
+  // so we page from newest until we pass the earlier of week/month start
+  // (weeks can straddle a month boundary in either direction).
+  const stopStr = weekStartStr < monthStartStr ? weekStartStr : monthStartStr;
+  let today = 0, week = 0, month = 0, startAfterDate = "", startAfter = "", pages = 0, done = false;
+  while (pages++ < 40 && !done) {
     const cursor = startAfterDate ? `&startAfterDate=${startAfterDate}&startAfter=${startAfter}` : "";
     const r = await ghlGet(`/conversations/search?locationId=${encodeURIComponent(loc)}&limit=100&sortBy=last_message_date&sort=desc${cursor}`, token);
     const batch: any[] = r.conversations || [];
@@ -188,9 +190,10 @@ async function coldCallsCount(token: string, loc: string, todayStr: string, week
     for (const c of batch) {
       const d = dayStr(toMs(c.lastMessageDate || c.dateUpdated || c.dateAdded));
       if (d > todayStr) continue;
-      if (d < weekStartStr) { done = true; break; }
+      if (d < stopStr) { done = true; break; }
       if (/call/i.test((c.lastMessageType || c.type || "").toString())) {
-        week++;
+        if (d >= weekStartStr) week++;
+        if (d >= monthStartStr) month++;
         if (d === todayStr) today++;
       }
     }
@@ -199,7 +202,7 @@ async function coldCallsCount(token: string, loc: string, todayStr: string, week
     startAfter = last.id;
     if (batch.length < 100) break;
   }
-  return { today, week };
+  return { today, week, month };
 }
 
 export default async (req: Request, _ctx: Context) => {
@@ -227,7 +230,7 @@ export default async (req: Request, _ctx: Context) => {
   const [stripeRes, calRes, ghlRes] = await Promise.all([
     stripeKey ? fromStripe(stripeKey, todayStr, monthStr).catch((e) => { errors.stripe = String(e.message || e); return null; }) : (errors.stripe = "no key", null),
     calToken ? fromCalendly(calToken, todayStr, weekStartStr, monthStr, calStore).catch((e) => { errors.calendly = String(e.message || e); return null; }) : (errors.calendly = "no key", null),
-    (ghlToken && ghlLoc) ? coldCallsCount(ghlToken, ghlLoc, todayStr, weekStartStr).catch((e) => { errors.ghl = String(e.message || e); return null; }) : (errors.ghl = "no key", null),
+    (ghlToken && ghlLoc) ? coldCallsCount(ghlToken, ghlLoc, todayStr, weekStartStr, monthStr + "-01").catch((e) => { errors.ghl = String(e.message || e); return null; }) : (errors.ghl = "no key", null),
   ]);
 
   // One-off manual booked-call adjustments (e.g. a real booking made on the wrong
@@ -264,6 +267,7 @@ export default async (req: Request, _ctx: Context) => {
     },
     month: {
       label: new Intl.DateTimeFormat("en-US", { timeZone: TZ, month: "long", year: "numeric" }).format(new Date(now)),
+      coldCalls: ghlRes?.month ?? null,
       bookedCalls: calRes ? calRes.bookedMonth + manMonth : null,
       newClients: stripeRes?.newClientsMonth ?? null,
       revenue: stripeRes?.revenueMonth ?? null,

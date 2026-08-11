@@ -51,9 +51,11 @@ export default async (req: Request, _ctx: Context) => {
 
   // Pulls every submission (not just a count) in [from, to] so callers can
   // bucket by day/month — paginated in case a client has more than one
-  // page's worth in the window.
-  async function fetchSubmissions(from: Date, to: Date): Promise<any[]> {
+  // page's worth in the window. Returns {leads, fbAdsHidden} so callers can
+  // report what got dropped.
+  async function fetchSubmissions(from: Date, to: Date): Promise<{ leads: any[]; fbAdsHidden: number }> {
     const out: any[] = [];
+    let fbAdsHidden = 0;
     let page = 1;
     const limit = 100;
     for (let i = 0; i < 20; i++) { // hard cap so a runaway response can't loop forever
@@ -64,23 +66,48 @@ export default async (req: Request, _ctx: Context) => {
         throw new Error(`GHL forms request failed (${res.status}): ${t.slice(0, 200)}`);
       }
       const data = await res.json();
-      const submissions: any[] = data.submissions || [];
-      out.push(...submissions);
-      if (submissions.length < limit) break; // last page
+      // Chat-widget submissions COUNT as leads (Anthony's call, 2026-07-15
+      // — a lead typing into the widget is still a lead). Only these two
+      // specific historical submissions are excluded: they hit Anytime
+      // Heating & Air's chat widget from an unrelated Facebook-ad situation
+      // before the client had any web presence set up — a one-off, same
+      // spirit as eod-report's MANUAL_BOOKINGS adjustments. Remove entries
+      // once they age out of every displayed window.
+      const EXCLUDED_SUBMISSION_IDS = new Set([
+        "2ebb5c59-b69f-4170-8675-7e4f4fbab3d9", // Patricia Butler, 2026-07 (Anytime H&A)
+        "d7b929ed-1838-41d9-a1ea-b5e35933aefd", // Pat Locklear, 2026-07 (Anytime H&A)
+      ]);
+      const raw: any[] = data.submissions || [];
+      for (const s of raw) {
+        if (EXCLUDED_SUBMISSION_IDS.has(String(s.id || ""))) continue;
+        // GHL's native Facebook Lead Ads sync writes these in as "form
+        // submissions" too, with formId always exactly `fb-<locationId>`
+        // (confirmed against live data, 2026-07-17 — 360 IV Infusion &
+        // Wellness had 7/10 "leads" this way, none from the real website
+        // form). This card is meant to be organic website form traffic
+        // only — Facebook ad leads are a paid-traffic funnel Anthony runs
+        // through GHL's own automation and tracks separately there, not
+        // something this count should mix in.
+        if (String(s.formId || "") === `fb-${locationId}`) { fbAdsHidden++; continue; }
+        out.push(s);
+      }
+      if (raw.length < limit) break; // last page — judged on the RAW page size, not the filtered count
       page++;
     }
-    return out;
+    return { leads: out, fbAdsHidden };
   }
 
   try {
-    const [windowSubmissions, monthlySubmissions] = await Promise.all([
+    const [windowResult, monthlyResult] = await Promise.all([
       fetchSubmissions(start, end),
       // Only re-fetch the wider range if it doesn't already fall inside the
       // rolling window we just pulled — avoids a redundant second call for
       // the common case (days >= the requested months' span).
-      monthsStart < start ? fetchSubmissions(monthsStart, end) : Promise.resolve<any[]>([]),
+      monthsStart < start ? fetchSubmissions(monthsStart, end) : Promise.resolve<{ leads: any[]; fbAdsHidden: number }>({ leads: [], fbAdsHidden: 0 }),
     ]);
-    const allForMonthly = monthsStart < start ? monthlySubmissions : windowSubmissions;
+    const windowSubmissions = windowResult.leads;
+    const allForMonthly = monthsStart < start ? monthlyResult.leads : windowSubmissions;
+    const fbAdsHidden = monthsStart < start ? monthlyResult.fbAdsHidden : windowResult.fbAdsHidden;
 
     // Bucket into YYYY-MM counts across the requested month range. GHL's own
     // field name for a submission's timestamp isn't documented consistently
@@ -108,6 +135,7 @@ export default async (req: Request, _ctx: Context) => {
     return json({
       totalLeads: windowSubmissions.length,
       windowDays: days,
+      fbAdsHidden,
       monthly,
       currentMonthCount,
       previousMonthCount,
