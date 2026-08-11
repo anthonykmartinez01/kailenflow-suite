@@ -117,9 +117,41 @@ export default async (req: Request, _ctx: Context) => {
       // trap worth naming, since "name" next to "formId" reads like a form
       // title. It is deliberately never returned here; this endpoint reports
       // structure and counts only.
+      // Webhook-delivered leads never appear in /forms/submissions — a site
+      // that POSTs straight into GHL creates a CONTACT instead. This probes
+      // whether the client's token can even read contacts (a separate scope
+      // most existing tokens were never granted) and what `source` values
+      // exist, which is what any auto-detection would have to key off.
+      // Counts and source labels only — no names, emails or phone numbers.
+      let contactsProbe: any = { checked: false };
+      try {
+        const cRes = await fetch(
+          `${GHL_BASE}/contacts/?locationId=${encodeURIComponent(locationId)}&limit=100`,
+          { headers },
+        );
+        if (!cRes.ok) {
+          contactsProbe = { checked: true, ok: false, status: cRes.status, note: cRes.status === 401 ? "token lacks the Contacts scope" : (await cRes.text()).slice(0, 120) };
+        } else {
+          const cData = await cRes.json();
+          const list: any[] = cData.contacts || [];
+          const bySource: Record<string, number> = {};
+          for (const c of list) {
+            const src = String(c.source || c.attributionSource?.utmSource || "(no source set)");
+            bySource[src] = (bySource[src] || 0) + 1;
+          }
+          contactsProbe = {
+            checked: true, ok: true, sampled: list.length,
+            sources: Object.entries(bySource).map(([source, count]) => ({ source, count })).sort((a, b) => b.count - a.count),
+          };
+        }
+      } catch (e: any) {
+        contactsProbe = { checked: true, ok: false, note: String(e?.message || e).slice(0, 120) };
+      }
+
       return json({
         debug: true,
         submissionsFound: leads.length,
+        contactsProbe,
         forms: Object.entries(byForm).map(([formId, count]) => ({
           formId,
           // `cwf-` is GHL's chat-widget form prefix — this is what
