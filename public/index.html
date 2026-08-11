@@ -2987,6 +2987,18 @@ function ClientIndexingTab({client,setData,data}){
   const rows=useMemo(()=>Object.entries(history).map(([path,rec])=>({path,...rec})).sort((a,b)=>a.date<b.date?1:-1),[history]);
   const [checking,setChecking]=useState(null); // path currently being manually re-checked, or null
 
+  // Staged indexing: per-client pages/day cap. Mirrors DEFAULT_INDEX_PER_DAY
+  // in shared/index-queue.mts — 0 means "no pacing, submit everything".
+  const queuedCount=useMemo(()=>rows.filter(r=>r.queued).length,[rows]);
+  const [perDay,setPerDay]=useState(()=>pub.indexPerDay===0?'0':String(pub.indexPerDay||5));
+  const savePerDay=()=>{
+    const n=perDay===''?5:Math.max(0,Math.min(50,Number(perDay)||0));
+    setPerDay(String(n));
+    if(n===(pub.indexPerDay??5))return;
+    setData(prev=>{const nd={...prev,clients:prev.clients.map(c=>c.id===client.id
+      ?{...c,publishing:{...(c.publishing||{}),indexPerDay:n}}:c)};saveData(nd);return nd});
+  };
+
   const recheckNow=async(path)=>{
     setChecking(path);
     try{
@@ -3004,6 +3016,11 @@ function ClientIndexingTab({client,setData,data}){
   );
   const CoveragePill=({rec})=>{
     if(rec.confirmed)return<span className="text-xs px-2 py-1 rounded-full font-medium bg-green-100 text-green-700">✓ Indexed</span>;
+    // Queued must read as waiting, not failing — it's the pacing cap doing its
+    // job, and showing it as an error would send Anthony debugging a
+    // non-problem. Checked before the other states because a queued page has
+    // no submission result to interpret.
+    if(rec.queued)return<span className="text-xs px-2 py-1 rounded-full font-medium bg-blue-100 text-blue-700">⏱ Queued — paced</span>;
     if((rec.checkAttempts||0)>=STALLED_CHECK_ATTEMPTS)return<span className="text-xs px-2 py-1 rounded-full font-medium bg-orange-100 text-orange-700">⚠ Not indexed after 3 weeks</span>;
     if(rec.lastCheckedAt)return<span className="text-xs px-2 py-1 rounded-full font-medium bg-yellow-100 text-yellow-700">⏳ {rec.coverageState||'Checking'}</span>;
     return<span className="text-xs px-2 py-1 rounded-full font-medium bg-gray-100 text-gray-500">Not checked yet</span>;
@@ -3015,6 +3032,18 @@ function ClientIndexingTab({client,setData,data}){
 
       <div className="stitch-glass-card rounded-[24px] p-6 space-y-3">
         <h4 className="text-lg font-semibold text-brand-dark">Pipeline Health</h4>
+        {/* Staged indexing status. Pacing is a rolling per-day allowance
+            checked on the hourly cron, so a single page still goes out within
+            the hour — only a burst gets spread out. */}
+        <div className="flex items-center justify-between text-sm gap-2 flex-wrap">
+          <span className="text-muted-stone">Indexing pace</span>
+          <div className="flex items-center gap-2 flex-wrap">
+            {queuedCount>0&&<span className="text-xs px-2 py-1 rounded-full font-medium bg-blue-100 text-blue-700">{queuedCount} queued</span>}
+            <input type="number" min="0" max="50" value={perDay} onChange={e=>setPerDay(e.target.value)} onBlur={savePerDay}
+              className="touch-target w-20 px-2 py-1 text-sm border border-glass-border rounded-xl focus:ring-1 focus:ring-brand focus:outline-none"/>
+            <span className="text-xs text-muted-stone">pages/day{String(perDay)==='0'?' (pacing off — submit everything at once)':''}</span>
+          </div>
+        </div>
         <div className="flex items-center justify-between text-sm gap-2 flex-wrap">
           <span className="text-muted-stone">Google Search Console</span>
           {client.gscProperty
@@ -3047,8 +3076,15 @@ function ClientIndexingTab({client,setData,data}){
                   <CoveragePill rec={rec}/>
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <SubmitPill ok={rec.google?.ok} label={'Google: '+(rec.google?.detail||'—')}/>
-                  <SubmitPill ok={rec.primeIndexer?.ok} label={'PrimeIndexer: '+(rec.primeIndexer?.detail||'—')}/>
+                  {/* A queued page has not been submitted to either service, so
+                      showing red "failed" pills would report a problem that
+                      doesn't exist. Say what's actually true instead. */}
+                  {rec.queued
+                    ?<span className="text-[11px] text-muted-stone">Waiting its turn — not yet sent to Google or PrimeIndexer</span>
+                    :<>
+                      <SubmitPill ok={rec.google?.ok} label={'Google: '+(rec.google?.detail||'—')}/>
+                      <SubmitPill ok={rec.primeIndexer?.ok} label={'PrimeIndexer: '+(rec.primeIndexer?.detail||'—')}/>
+                    </>}
                   {rec.lastCheckedAt&&<span className="text-[11px] text-muted-stone">Checked {new Date(rec.lastCheckedAt).toLocaleString()}</span>}
                   <button onClick={()=>recheckNow(rec.path)} disabled={checking===rec.path||rec.confirmed}
                     className="text-[11px] text-brand hover:underline disabled:opacity-40 disabled:cursor-not-allowed ml-auto">
