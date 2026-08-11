@@ -97,6 +97,43 @@ export default async (req: Request, _ctx: Context) => {
     return { leads: out, fbAdsHidden };
   }
 
+  // Structural diagnostic for onboarding a new client: answers "what is
+  // actually arriving in this sub-account, and through which form?" without
+  // exposing a single lead's personal details. Returns form ids/names, the
+  // KEYS present on a submission, and counts — never field VALUES, because
+  // those are real people's names, emails and phone numbers and there is no
+  // reason for a debugging call to carry them anywhere.
+  if (body.debug === true) {
+    try {
+      const { leads } = await fetchSubmissions(monthsStart < start ? monthsStart : start, end);
+      const byForm: Record<string, number> = {};
+      const keySet = new Set<string>();
+      for (const s of leads) {
+        const id = String(s.formId || "(none)");
+        byForm[id] = (byForm[id] || 0) + 1;
+        Object.keys(s || {}).forEach((k) => keySet.add(k));
+      }
+      // `s.name` on a GHL submission is the LEAD'S name, not the form's — a
+      // trap worth naming, since "name" next to "formId" reads like a form
+      // title. It is deliberately never returned here; this endpoint reports
+      // structure and counts only.
+      return json({
+        debug: true,
+        submissionsFound: leads.length,
+        forms: Object.entries(byForm).map(([formId, count]) => ({
+          formId,
+          // `cwf-` is GHL's chat-widget form prefix — this is what
+          // distinguishes a widget conversation from a page form.
+          kind: formId.startsWith("cwf-") ? "chat widget" : "page form",
+          count,
+        })),
+        submissionFieldNames: Array.from(keySet).sort(),
+      });
+    } catch (e: any) {
+      return json({ debug: true, error: String(e?.message || e) }, 502);
+    }
+  }
+
   try {
     const [windowResult, monthlyResult] = await Promise.all([
       fetchSubmissions(start, end),
