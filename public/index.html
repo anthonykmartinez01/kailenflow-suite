@@ -916,10 +916,10 @@ function GHLLeadsCard({client,setData,setTab}){
     if(!ready)return;
     setState('loading');setError('');setErrorDetail('');
     try{
-      const r=await fetch('/api/ghl-leads',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({locationId:client.ghlLocationId,token:client.ghlPrivateToken,days:28})});
+      const r=await fetch('/api/ghl-leads',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({locationId:client.ghlLocationId,token:client.ghlPrivateToken,days:28,leadsViaWebhook:client.leadsViaWebhook===true})});
       const j=await r.json();
       if(!r.ok||j.error){setState('error');setError(j.error||'Failed to load leads');setErrorDetail(j.detail||'');return}
-      const summary={totalLeads:j.totalLeads,windowDays:j.windowDays,fetchedAt:Date.now()};
+      const summary={totalLeads:j.totalLeads,windowDays:j.windowDays,formLeads:j.formLeads,webhookLeads:j.webhookLeads,webhookCounted:j.webhookCounted,webhookError:j.webhookError,fetchedAt:Date.now()};
       setLeadsData(summary);
       setState('loaded');
       if(setData){
@@ -956,7 +956,15 @@ function GHLLeadsCard({client,setData,setTab}){
       {ready&&leadsData&&(
         <>
           <p className="text-4xl font-bold text-brand-dark tracking-tight leading-none">{leadsData.totalLeads.toLocaleString()}</p>
-          <p className="text-[11px] text-muted-stone mt-2">Form submissions · last {leadsData.windowDays} days · as of {fmt(leadsData.fetchedAt)}</p>
+          <p className="text-[11px] text-muted-stone mt-2">
+            {leadsData.webhookCounted
+              ? `${leadsData.formLeads} form · ${leadsData.webhookLeads} webhook · last ${leadsData.windowDays} days`
+              : `Form submissions · last ${leadsData.windowDays} days`} · as of {fmt(leadsData.fetchedAt)}
+          </p>
+          {/* A webhook client whose token lacks View Contacts would otherwise
+              show a plausible-looking number that silently omits every
+              webhook lead. Say so instead. */}
+          {leadsData.webhookError&&<p className="text-[11px] text-amber-700 mt-1">⚠️ {leadsData.webhookError}</p>}
         </>
       )}
     </DashCard>
@@ -1648,11 +1656,11 @@ function SettingsTab({client,setData}){
   const [indexingError,setIndexingError]=useState('');
   const [connStatus,setConnStatus]=useState(null); // null=checking/unknown, else the /api/indexing-status response
   const [connChecking,setConnChecking]=useState(false);
-  const [local,setLocal]=useState(()=>({name:client.name||'',website:client.website||'',gbpUrl:client.gbpUrl||'',phone:client.phone||'',primaryCategory:client.primaryCategory||'',address:client.address||'',city:client.city||'',state:client.state||'',notes:client.notes||'',ghlLocationId:client.ghlLocationId||'',ghlPrivateToken:client.ghlPrivateToken||'',gbpLocationId:client.gbpLocationId||'',bookingUrl:client.bookingUrl||'',orderingUrl:client.orderingUrl||''}));
+  const [local,setLocal]=useState(()=>({name:client.name||'',website:client.website||'',gbpUrl:client.gbpUrl||'',phone:client.phone||'',primaryCategory:client.primaryCategory||'',address:client.address||'',city:client.city||'',state:client.state||'',notes:client.notes||'',ghlLocationId:client.ghlLocationId||'',ghlPrivateToken:client.ghlPrivateToken||'',gbpLocationId:client.gbpLocationId||'',bookingUrl:client.bookingUrl||'',orderingUrl:client.orderingUrl||'',leadsViaWebhook:client.leadsViaWebhook===true}));
   const [localScores,setLocalScores]=useState(()=>JSON.parse(JSON.stringify(client.scores||{gbpHealth:{current:0,projected:0},landingPage:{current:0},core30:{current:0,total:0}})));
   const [localPub,setLocalPub]=useState(()=>({repo:client.publishing?.repo||'',branch:client.publishing?.branch||'',pagesDir:client.publishing?.pagesDir||'src/pages',buildHook:client.publishing?.buildHook||''}));
   const prevId=useRef(client.id);
-  useEffect(()=>{if(prevId.current!==client.id){setLocal({name:client.name||'',website:client.website||'',gbpUrl:client.gbpUrl||'',phone:client.phone||'',primaryCategory:client.primaryCategory||'',address:client.address||'',city:client.city||'',state:client.state||'',notes:client.notes||'',ghlLocationId:client.ghlLocationId||'',ghlPrivateToken:client.ghlPrivateToken||'',gbpLocationId:client.gbpLocationId||'',bookingUrl:client.bookingUrl||'',orderingUrl:client.orderingUrl||''});setLocalScores(JSON.parse(JSON.stringify(client.scores||{})));setLocalPub({repo:client.publishing?.repo||'',branch:client.publishing?.branch||'',pagesDir:client.publishing?.pagesDir||'src/pages',buildHook:client.publishing?.buildHook||''});prevId.current=client.id}},[client.id]);
+  useEffect(()=>{if(prevId.current!==client.id){setLocal({name:client.name||'',website:client.website||'',gbpUrl:client.gbpUrl||'',phone:client.phone||'',primaryCategory:client.primaryCategory||'',address:client.address||'',city:client.city||'',state:client.state||'',notes:client.notes||'',ghlLocationId:client.ghlLocationId||'',ghlPrivateToken:client.ghlPrivateToken||'',gbpLocationId:client.gbpLocationId||'',bookingUrl:client.bookingUrl||'',orderingUrl:client.orderingUrl||'',leadsViaWebhook:client.leadsViaWebhook===true});setLocalScores(JSON.parse(JSON.stringify(client.scores||{})));setLocalPub({repo:client.publishing?.repo||'',branch:client.publishing?.branch||'',pagesDir:client.publishing?.pagesDir||'src/pages',buildHook:client.publishing?.buildHook||''});prevId.current=client.id}},[client.id]);
   const debRef=useRef(null);
   const update=(field,value)=>{
     setLocal(prev=>({...prev,[field]:value}));
@@ -1789,6 +1797,20 @@ function SettingsTab({client,setData}){
           <p><b>4. For the Review Funnel only</b> — that client needs a pipeline containing two stages named exactly <b>"Review Requested"</b> and <b>"Review Link Clicked"</b>. The pipeline's own name doesn't matter (it's found by those stage names, so "(Don't Touch) Review Pipeline" works fine); the stage names do. "Review left" is read from the opportunity being marked <b>won</b>, so no third stage is needed.</p>
           <p className="text-muted-stone/80">Nothing else needs this token — Send-to-GHL, Call Coach, and the EOD report all use the agency-wide server token instead.</p>
         </div></div>
+        {/* Webhook lead mode. Some client sites POST straight into GHL instead
+            of using a GHL form; those leads land as CONTACTS and are invisible
+            to the forms endpoint, so the card reads zero without this. */}
+        <div className="sm:col-span-2">
+          <label className="flex items-start gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={local.leadsViaWebhook===true} onChange={e=>update('leadsViaWebhook',e.target.checked)} className="w-4 h-4 mt-0.5 accent-[#C45A30] flex-shrink-0"/>
+            <span><b>Website leads arrive by webhook, not a GHL form</b></span>
+          </label>
+          <div className="text-[11px] text-muted-stone mt-1 space-y-1">
+            <p>Tick this when the site posts straight into GoHighLevel. Those leads become <b>contacts</b> rather than form submissions, so without this the Website Leads card reads zero for them. Contacts already linked to a form submission are never double-counted.</p>
+            <p>Requires <b>View Contacts</b> on this client's Private Integration token, alongside View Forms and View Opportunities. Without it the card says so rather than showing a silent zero.</p>
+            <p className="text-amber-700">While this is on, anything else that creates a contact in this sub-account — a manual add, a CSV import, a call logged by hand — counts as a website lead too. Only use it where the webhook really is the only thing creating contacts.</p>
+          </div>
+        </div>
         <div className="sm:col-span-2">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <label className="text-sm font-medium text-deep-obsidian/70">GBP Location ID</label>
@@ -2308,7 +2330,7 @@ function PerformanceMetricsSection({client,setData}){
     (async()=>{
       const headers=await authHeaders({'Content-Type':'application/json'});
       if(ghlReady){
-        const body=JSON.stringify({locationId:client.ghlLocationId,token:client.ghlPrivateToken,months:4});
+        const body=JSON.stringify({locationId:client.ghlLocationId,token:client.ghlPrivateToken,months:4,leadsViaWebhook:client.leadsViaWebhook===true});
         fetch('/api/ghl-leads',{method:'POST',headers,body}).then(r=>r.json().then(j=>({ok:r.ok,j}))).then(({ok,j})=>{
           if(cancelled)return;
           if(!ok||j.error)setLeadsState('error');else{setLeadsData(j);setLeadsState('loaded')}

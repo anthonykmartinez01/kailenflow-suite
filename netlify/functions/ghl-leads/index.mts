@@ -166,6 +166,55 @@ export default async (req: Request, _ctx: Context) => {
     }
   }
 
+  // ─── Webhook-delivered leads ─────────────────────────────────────────
+  // Some client sites POST straight into GHL rather than using a GHL form.
+  // Those leads become CONTACTS and never appear in /forms/submissions, so
+  // the card under-reports them to zero. Anthony's rule: on those clients the
+  // webhook is used for nothing but website enquiries, so a contact IS a
+  // lead.
+  //
+  // Deduped by contactId against form submissions, because a client can have
+  // both: a GHL form ALSO creates a contact, and counting both would double
+  // every form lead. Submissions carry contactId, which makes the join exact
+  // rather than a guess on name or email.
+  //
+  // Caveat worth stating plainly, and surfaced in the response: this counts
+  // contacts, and anything else that creates a contact in that sub-account
+  // (a manual add, a CSV import, a call-in logged by hand) is indistinguish-
+  // able from a webhook lead here. It is only accurate while the webhook is
+  // genuinely the sole contact-creating path.
+  async function fetchContacts(from: Date, to: Date): Promise<{ contacts: any[]; error: string | null }> {
+    const out: any[] = [];
+    let startAfterId = "";
+    let startAfter = "";
+    for (let i = 0; i < 20; i++) {
+      const q = new URLSearchParams({ locationId, limit: "100" });
+      if (startAfterId) { q.set("startAfterId", startAfterId); q.set("startAfter", startAfter); }
+      const res = await fetch(`${GHL_BASE}/contacts/?${q}`, { headers });
+      if (!res.ok) {
+        return { contacts: out, error: res.status === 401
+          ? "This client's GHL token doesn't include the View Contacts scope, so webhook leads can't be read. Add it to their Private Integration and save the token again."
+          : `GHL contacts request failed (${res.status})` };
+      }
+      const data = await res.json();
+      const batch: any[] = data.contacts || [];
+      if (batch.length === 0) break;
+      let reachedEnd = false;
+      for (const c of batch) {
+        const t = new Date(c.dateAdded || c.createdAt || 0).getTime();
+        if (!Number.isFinite(t) || t === 0) continue;
+        if (t < from.getTime()) { reachedEnd = true; continue; } // list is newest-first
+        if (t > to.getTime()) continue;
+        out.push(c);
+      }
+      if (reachedEnd || batch.length < 100) break;
+      const last = batch[batch.length - 1];
+      startAfterId = last.id;
+      startAfter = String(new Date(last.dateAdded || last.createdAt || 0).getTime());
+    }
+    return { contacts: out, error: null };
+  }
+
   try {
     const [windowResult, monthlyResult] = await Promise.all([
       fetchSubmissions(start, end),
@@ -194,6 +243,30 @@ export default async (req: Request, _ctx: Context) => {
       const key = new Date(raw).toISOString().slice(0, 7);
       if (key in counts) counts[key]++;
     }
+    // Webhook mode: add contacts that aren't already represented by a form
+    // submission, into both the rolling window total and the monthly buckets.
+    let webhookLeads = 0;
+    let webhookError: string | null = null;
+    let webhookCounted = false;
+    if (body.leadsViaWebhook === true) {
+      webhookCounted = true;
+      const fetchFrom = monthsStart < start ? monthsStart : start;
+      const { contacts, error } = await fetchContacts(fetchFrom, end);
+      webhookError = error;
+      // contactId is present on submissions, so the join is exact.
+      const seenContactIds = new Set(
+        [...allForMonthly, ...windowSubmissions].map((s: any) => String(s.contactId || "")).filter(Boolean),
+      );
+      for (const c of contacts) {
+        if (seenContactIds.has(String(c.id || ""))) continue; // already counted as a form submission
+        const t = new Date(c.dateAdded || c.createdAt || 0).getTime();
+        if (!Number.isFinite(t)) continue;
+        const key = new Date(t).toISOString().slice(0, 7);
+        if (key in counts) counts[key]++;
+        if (t >= start.getTime()) webhookLeads++;
+      }
+    }
+
     const monthly = monthKeys.map((month) => ({ month, count: counts[month] }));
     const currentMonthCount = monthly[monthly.length - 1]?.count ?? 0;
     const previousMonthCount = monthly[monthly.length - 2]?.count ?? 0;
@@ -202,7 +275,14 @@ export default async (req: Request, _ctx: Context) => {
       : (currentMonthCount > 0 ? 100 : 0);
 
     return json({
-      totalLeads: windowSubmissions.length,
+      totalLeads: windowSubmissions.length + webhookLeads,
+      // Broken out so the number is auditable rather than a single figure to
+      // take on trust — and so a webhook client with a broken scope shows a
+      // reason instead of a silent zero.
+      formLeads: windowSubmissions.length,
+      webhookLeads,
+      webhookCounted,
+      webhookError,
       windowDays: days,
       fbAdsHidden,
       monthly,
