@@ -104,6 +104,40 @@ export async function stripeCustomers(key: string): Promise<StripeCustomer[]> {
   return out;
 }
 
+/**
+ * Money in, by calendar month (Central time) — the Finance tool's income.
+ * Income = successful charges minus refunds. Fees come from each charge's
+ * balance transaction when the key can read it; if it can't, fees are
+ * reported as unavailable rather than silently zero.
+ */
+export async function stripeMonthlyIncome(key: string, sinceMs: number): Promise<{ months: Record<string, { income: number; fees: number | null }>; feesAvailable: boolean }> {
+  const since = Math.floor(sinceMs / 1000);
+  const charges = await all(`charges?created[gte]=${since}&expand[]=data.balance_transaction`, key, 20);
+  const months: Record<string, { income: number; fees: number | null }> = {};
+  let feesAvailable = true;
+  const monthOf = (sec: number) =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago", year: "numeric", month: "2-digit" }).format(new Date(sec * 1000)).slice(0, 7);
+
+  for (const c of charges) {
+    if (c.status !== "succeeded" || !c.paid) continue;
+    const m = monthOf(c.created);
+    const row = (months[m] ||= { income: 0, fees: 0 });
+    row.income += ((c.amount || 0) - (c.amount_refunded || 0)) / 100;
+    const bt = c.balance_transaction;
+    if (bt && typeof bt === "object" && typeof bt.fee === "number") {
+      if (row.fees != null) row.fees += bt.fee / 100;
+    } else {
+      feesAvailable = false;
+      row.fees = null;
+    }
+  }
+  for (const m of Object.keys(months)) {
+    months[m].income = Math.round(months[m].income * 100) / 100;
+    if (months[m].fees != null) months[m].fees = Math.round((months[m].fees as number) * 100) / 100;
+  }
+  return { months, feesAvailable };
+}
+
 /** Loose match used to SUGGEST a link — never applied without approval. */
 export function suggestMatch(cust: StripeCustomer, clients: { id: string; name?: string; email?: string }[]): string | null {
   const norm = (s: string) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");

@@ -686,6 +686,7 @@ function Sidebar({clients,activeClient,setActiveClient,view,setView,onAddClient,
       {key:'gbpportfolio',icon:'storefront',label:'GBP Portfolio'},
       {key:'callcoach',icon:'call',label:'Call Coach'},
       {key:'eod',icon:'trending_up',label:'End of Day'},
+      {key:'finance',icon:'account_balance_wallet',label:'Finance'},
     ]},
     {label:'Clients', items:[
       {key:'overview',icon:'group',label:'All Clients'},
@@ -11614,6 +11615,7 @@ function AuthenticatedApp(){
           {view==='leadfinder'&&<LeadFinder data={data} setData={setData}/>}
           {view==='categoryanalyzer'&&<CategoryAnalyzer/>}
           {view==='gbpportfolio'&&<GbpPortfolio/>}
+          {view==='finance'&&<FinanceDashboard/>}
           {view==='callcoach'&&<CallCoach data={data} setData={setData}/>}
           {view==='pagepublisher'&&<PagePublisherView data={data} setData={setData}/>}
           {view==='indexing'&&<IndexingDashboard data={data} setData={setData}/>}
@@ -12428,6 +12430,202 @@ function CategoryAnalyzer(){
               ))}
             </div>
           </div>
+        )}
+      </>)}
+    </div>
+  );
+}
+
+// FINANCE — the numbers that matter, per month: income (Stripe), business
+// expenses, personal expenses, total expenses, business profit, and what's
+// actually left. Plus a typical month (average of the last 3 complete months)
+// so one good or bad month doesn't distort the picture.
+// Income only ever comes from Stripe; expenses only from the bank (Plaid).
+// Transfers between his own accounts, card payments and Stripe payouts are
+// never counted as spending. Rules + tests: shared/finance-rules.mts.
+function FinanceDashboard(){
+  const nowD=new Date();
+  const thisMonth=nowD.getFullYear()+'-'+String(nowD.getMonth()+1).padStart(2,'0');
+  const [month,setMonth]=useState(thisMonth);
+  const [data,setData]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [busy,setBusy]=useState('');
+  const [err,setErr]=useState('');
+  const [msg,setMsg]=useState('');
+  const want=useRef(thisMonth);
+
+  const api=async(payload)=>{
+    const r=await fetch('/api/finance',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(payload)});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||j.error)throw new Error(j.error||'Something went wrong.');
+    return j;
+  };
+  const load=async(fresh)=>{
+    const m=month;want.current=m;setLoading(true);setErr('');
+    try{const j=await api({action:'summary',month:m,fresh:!!fresh});if(want.current===m)setData(j)}
+    catch(e){if(want.current===m)setErr(e.message)}
+    finally{if(want.current===m)setLoading(false)}
+  };
+  useEffect(()=>{load(false)},[month]);
+
+  const shift=d=>{const [y,m]=month.split('-').map(Number);const x=new Date(y,m-1+d,1);setMonth(x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0'))};
+  const monthLabel=(()=>{const [y,m]=month.split('-').map(Number);return new Date(y,m-1,1).toLocaleDateString(undefined,{month:'long',year:'numeric'})})();
+  const money=n=>(n==null?'—':(n<0?'−':'')+'$'+Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0}));
+
+  // Plaid Link: the bank login happens inside Plaid's own window; this app
+  // only ever receives a one-time public token.
+  const loadPlaidScript=()=>new Promise((res,rej)=>{
+    if(window.Plaid)return res();
+    const s=document.createElement('script');s.src='https://cdn.plaid.com/link/v2/stable/link-initialize.js';
+    s.onload=()=>res();s.onerror=()=>rej(new Error('Could not load Plaid.'));document.head.appendChild(s);
+  });
+  const connectBank=async()=>{
+    setBusy('connect');setErr('');setMsg('');
+    try{
+      await loadPlaidScript();
+      const {linkToken}=await api({action:'link-token'});
+      const handler=window.Plaid.create({
+        token:linkToken,
+        onSuccess:async(publicToken,meta)=>{
+          try{
+            setMsg('Connected — pulling transactions…');
+            const j=await api({action:'exchange',publicToken,institution:meta?.institution?.name||null});
+            setMsg('Connected '+(meta?.institution?.name||'bank')+' · '+(j.sync?.total||0)+' transactions');
+            await load(true);
+          }catch(e){setErr(e.message)}finally{setBusy('')}
+        },
+        onExit:()=>setBusy(''),
+      });
+      handler.open();
+    }catch(e){setErr(e.message);setBusy('')}
+  };
+  const sync=async()=>{setBusy('sync');setMsg('');try{const j=await api({action:'sync'});setMsg('Bank synced · '+j.added+' new, '+j.modified+' updated'+(j.errors?.length?' · '+j.errors.join('; '):''));await load(true)}catch(e){setErr(e.message)}finally{setBusy('')}};
+  const tag=async(key,kind,label)=>{setBusy(key);try{await api({action:'tag',key,kind,label});await load(false)}catch(e){setErr(e.message)}finally{setBusy('')}};
+  const removeBank=async(itemId,name)=>{if(!confirm('Disconnect '+(name||'this bank')+'? Its transactions will be removed from the dashboard.'))return;setBusy('rm');try{await api({action:'remove-bank',itemId});await load(false)}catch(e){setErr(e.message)}finally{setBusy('')}};
+
+  const s=data?.selected, t=data?.typical;
+  const Card=({label,value,sub,tone,hero})=>(
+    <div className={(hero?'bg-brand text-white shadow-xl shadow-brand/20':'stitch-glass-card')+' rounded-[24px] p-5 flex flex-col min-h-[118px]'}>
+      <p className={'text-[11px] font-semibold uppercase tracking-widest '+(hero?'opacity-80':'text-muted-stone')}>{label}</p>
+      <p className={'mt-auto pt-2 text-3xl font-bold tracking-tight '+(hero?'':(tone==='good'?'text-green-700':tone==='bad'?'text-red-600':'text-brand-dark'))}>{value}</p>
+      {sub&&<p className={'text-[11px] '+(hero?'text-white/80':'text-muted-stone')}>{sub}</p>}
+    </div>
+  );
+  const noBank=data&&!data.banks?.length;
+
+  return(
+    <div className="fade-in font-manrope">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 mb-6">
+        <div>
+          <h2 className="text-2xl font-bold text-brand-dark">Finance</h2>
+          <p className="text-sm text-muted-stone mt-1">Income from Stripe, spending from your bank. Transfers between your own accounts and card payments are never counted as spending.</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 stitch-glass-card rounded-xl p-1">
+            <button onClick={()=>shift(-1)} aria-label="Previous month" className="touch-target px-3 py-1 rounded-lg text-lg text-deep-obsidian/70 hover:bg-black/5">‹</button>
+            <span className="text-sm font-semibold text-brand-dark min-w-[9rem] text-center">{monthLabel}</span>
+            <button onClick={()=>shift(1)} disabled={month===thisMonth} aria-label="Next month" className="touch-target px-3 py-1 rounded-lg text-lg text-deep-obsidian/70 hover:bg-black/5 disabled:opacity-30">›</button>
+          </div>
+          {data?.banks?.length>0&&<button onClick={sync} disabled={busy==='sync'} className="touch-target px-3 py-2 rounded-xl text-sm font-medium stitch-glass-card text-deep-obsidian/70 hover:bg-black/5">{busy==='sync'?'Syncing…':'Sync bank'}</button>}
+          <button onClick={connectBank} disabled={busy==='connect'||data?.plaid?.configured===false} className="touch-target px-3 py-2 rounded-xl text-sm font-semibold border border-brand text-brand hover:bg-brand/5 disabled:opacity-50">{busy==='connect'?'Opening…':(data?.banks?.length?'Add account':'Connect bank')}</button>
+        </div>
+      </div>
+
+      {err&&<div className="bg-red-50 text-red-700 rounded-xl p-3 text-sm mb-4">{err}</div>}
+      {msg&&<div className="bg-brand/10 text-brand-dark rounded-xl p-3 text-xs mb-4">{msg}</div>}
+      {data?.plaid?.configured===false&&<div className="bg-amber-50 text-amber-800 rounded-xl p-3 text-xs mb-4">Bank connection isn't set up yet — add PLAID_CLIENT_ID, PLAID_SECRET and PLAID_ENV in Netlify. Income from Stripe already works below.</div>}
+      {data?.plaid?.env==='sandbox'&&data?.banks?.length>0&&<div className="bg-amber-50 text-amber-800 rounded-xl p-3 text-xs mb-4">Plaid is in <b>sandbox</b> mode — these are test transactions, not your real bank.</div>}
+      {data?.stripe?.error&&<div className="bg-amber-50 text-amber-800 rounded-xl p-3 text-xs mb-4">Stripe: {data.stripe.error}</div>}
+      {loading&&!data&&<p className="text-sm text-muted-stone py-8 text-center">Loading {monthLabel}…</p>}
+
+      {s&&(<>
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 mb-3">
+          <Card hero label={data.isCurrentMonth?'Left over so far':'Left over'} value={money(s.net)} sub="income − all expenses"/>
+          <Card label="Income" value={money(s.income)} sub="from Stripe"/>
+          <Card label="Business profit" value={money(s.businessProfit)} sub="income − business expenses" tone={s.businessProfit>=0?'good':'bad'}/>
+          <Card label="Business expenses" value={money(s.business)} sub={s.stripeFees?'incl. '+money(s.stripeFees)+' Stripe fees':''}/>
+          <Card label="Personal expenses" value={money(s.personal)}/>
+          <Card label="Total expenses" value={money(s.totalExpenses)} sub={s.unsorted?money(s.unsorted)+' not tagged yet':''}/>
+        </div>
+        {data.isCurrentMonth&&<p className="text-[11px] text-muted-stone mb-4">{monthLabel} isn't over — these are month-to-date numbers.</p>}
+        {noBank&&<p className="text-[11px] text-muted-stone mb-4">No bank connected yet, so expenses show as $0 — only Stripe income is real here until you connect your bank.</p>}
+        {data.excluded?.count>0&&<p className="text-[11px] text-muted-stone mb-4">{data.excluded.count} transfers / card payments ({money(data.excluded.total)}) left out — money moving between your own accounts isn't spending.</p>}
+
+        {t&&(
+          <div className="stitch-glass-card rounded-[24px] p-5 mb-4">
+            <div className="flex items-baseline justify-between flex-wrap gap-2 mb-3">
+              <h3 className="font-bold text-brand-dark">Typical month</h3>
+              <span className="text-[11px] text-muted-stone">{t.month}, complete months only</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-sm">
+              {[['Income',t.income],['Business exp.',t.business],['Personal exp.',t.personal],['Total exp.',t.totalExpenses],['Business profit',t.businessProfit],['Left over',t.net]].map(([l,v])=>(
+                <div key={l}><p className="text-[11px] text-muted-stone">{l}</p><p className={'text-lg font-bold '+(l==='Left over'?(v>=0?'text-green-700':'text-red-600'):'text-brand-dark')}>{money(v)}</p></div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+          <div className="stitch-glass-card rounded-[24px] p-5">
+            <h3 className="font-bold text-brand-dark mb-3">Where it went · {monthLabel}</h3>
+            {data.breakdown.length===0?<p className="text-sm text-muted-stone">No spending recorded for this month.</p>:(
+              <div className="space-y-2">
+                {data.breakdown.slice(0,15).map(g=>(
+                  <div key={g.kind+g.label} className="flex items-center justify-between gap-3 text-sm">
+                    <span className="min-w-0 truncate"><span className={'inline-block w-2 h-2 rounded-full mr-2 '+(g.kind==='business'?'bg-brand':g.kind==='personal'?'bg-deep-obsidian/40':'bg-amber-400')}/>{g.label}{g.count>1?<span className="text-muted-stone"> ×{g.count}</span>:''}</span>
+                    <span className="font-semibold flex-shrink-0">{money(g.total)}</span>
+                  </div>
+                ))}
+                <p className="text-[11px] text-muted-stone pt-1"><span className="inline-block w-2 h-2 rounded-full bg-brand mr-1"/>business <span className="inline-block w-2 h-2 rounded-full bg-deep-obsidian/40 mx-1 ml-3"/>personal <span className="inline-block w-2 h-2 rounded-full bg-amber-400 mx-1 ml-3"/>not tagged</p>
+              </div>
+            )}
+          </div>
+
+          <div className="stitch-glass-card rounded-[24px] p-5">
+            <h3 className="font-bold text-brand-dark mb-1">Tag your spending</h3>
+            <p className="text-[11px] text-muted-stone mb-3">Tag a merchant once and every charge from it — past and future — follows.</p>
+            {data.toTag.length===0?<p className="text-sm text-muted-stone">{noBank?'Connect your bank to see spending.':'Everything is tagged.'}</p>:(
+              <div className="space-y-2 max-h-[360px] overflow-y-auto">
+                {data.toTag.map(u=>(
+                  <div key={u.key} className="flex items-center justify-between gap-2 text-sm">
+                    <span className="min-w-0"><span className="block truncate">{u.label}</span><span className="text-[11px] text-muted-stone">{money(u.total)} · {u.count} charge{u.count===1?'':'s'}</span></span>
+                    <span className="flex gap-1 flex-shrink-0">
+                      <button disabled={busy===u.key} onClick={()=>tag(u.key,'business',u.label)} className="touch-target px-2 py-1 rounded-lg text-xs font-semibold border border-brand text-brand hover:bg-brand/5">Business</button>
+                      <button disabled={busy===u.key} onClick={()=>tag(u.key,'personal',u.label)} className="touch-target px-2 py-1 rounded-lg text-xs font-medium border border-glass-border hover:bg-black/5">Personal</button>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="stitch-glass-card rounded-[24px] p-5 mb-4">
+          <h3 className="font-bold text-brand-dark mb-3">Month by month</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[620px]">
+              <thead><tr className="text-[11px] uppercase tracking-widest text-muted-stone text-left">
+                <th className="py-2 pr-3 font-semibold">Month</th><th className="py-2 pr-3 font-semibold text-right">Income</th><th className="py-2 pr-3 font-semibold text-right">Business</th><th className="py-2 pr-3 font-semibold text-right">Personal</th><th className="py-2 pr-3 font-semibold text-right">Total exp.</th><th className="py-2 pr-3 font-semibold text-right">Biz profit</th><th className="py-2 font-semibold text-right">Left over</th>
+              </tr></thead>
+              <tbody>{data.history.map(h=>(
+                <tr key={h.month} onClick={()=>setMonth(h.month)} className={'border-t border-glass-border cursor-pointer hover:bg-black/[0.02] '+(h.month===month?'bg-brand/5':'')}>
+                  <td className="py-2 pr-3">{new Date(h.month+'-01T12:00:00').toLocaleDateString(undefined,{month:'short',year:'numeric'})}{h.month===data.currentMonth?<span className="text-[11px] text-muted-stone"> (so far)</span>:''}</td>
+                  <td className="py-2 pr-3 text-right">{money(h.income)}</td>
+                  <td className="py-2 pr-3 text-right">{money(h.business)}</td>
+                  <td className="py-2 pr-3 text-right">{money(h.personal)}</td>
+                  <td className="py-2 pr-3 text-right">{money(h.totalExpenses)}</td>
+                  <td className={'py-2 pr-3 text-right '+(h.businessProfit<0?'text-red-600':'')}>{money(h.businessProfit)}</td>
+                  <td className={'py-2 text-right font-semibold '+(h.net<0?'text-red-600':'text-green-700')}>{money(h.net)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </div>
+
+        {data.banks?.length>0&&(
+          <p className="text-[11px] text-muted-stone">Connected: {data.banks.map(b=>(
+            <span key={b.itemId} className="mr-3">{b.institution||'Bank'}{b.lastSyncAt?' · synced '+new Date(b.lastSyncAt).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):''}{b.error?<span className="text-red-600"> · {b.error}</span>:''} <button onClick={()=>removeBank(b.itemId,b.institution)} className="underline hover:text-red-600">disconnect</button></span>
+          ))}</p>
         )}
       </>)}
     </div>
