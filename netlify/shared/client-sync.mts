@@ -5,6 +5,7 @@ import { lastEmailWith, domainOf, gmailGranted } from "./gmail.mts";
 import { getGoogleAccessToken } from "./google-auth.mts";
 import { recentCommits, githubToken } from "./github-work.mts";
 import { getSiteByClientId } from "./page-publisher/firestore.mts";
+import { applyIngest, type IngestRow } from "./client-ingest-merge.mts";
 
 // The unattended half of Client Management: refresh Stripe, and (only if the
 // permission is actually granted) refresh "last contacted" from Gmail. Shared
@@ -31,6 +32,61 @@ export async function refreshStripeCache(force = false, ttlMs = 10 * 60 * 1000) 
     // Stale beats nothing — the page still shows the last known state.
     return { ok: false as const, error: String(e?.message || e), cache: cached || null };
   }
+}
+
+// Where a Claude Code session drops what it read from MCP-only tools (Elara).
+// Kept in this app's own repo so the existing GITHUB_TOKEN is the only
+// credential involved — no ingest token to create or store.
+const INGEST_DIR = "ops/client-ingest";
+const INGEST_REPO = () => Netlify.env.get("INGEST_REPO") || "anthonykmartinez01/kailenflow-suite";
+
+async function gh(path: string, token: string) {
+  const r = await fetch(`https://api.github.com/${path}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json", "User-Agent": "kailenflow-suite" },
+  });
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`GitHub ${r.status}: ${(await r.text()).slice(0, 160)}`);
+  return r.json();
+}
+
+/**
+ * Reads every ops/client-ingest/*.json in the repo and merges it in. The file
+ * name is the source ("elara.json" -> source "elara"). Re-running replaces
+ * that source's items rather than duplicating them.
+ */
+export async function ingestFromRepo(): Promise<{ ok: boolean; reason?: string; sources?: string[]; matched?: number; unmatched?: string[] }> {
+  const token = githubToken();
+  if (!token) return { ok: false, reason: "GITHUB_TOKEN isn't set in Netlify." };
+  let listing: any;
+  try { listing = await gh(`repos/${INGEST_REPO()}/contents/${INGEST_DIR}`, token); }
+  catch (e: any) { return { ok: false, reason: String(e?.message || e) }; }
+  if (!listing) return { ok: true, sources: [], matched: 0, unmatched: [], reason: `No ${INGEST_DIR}/ in the repo yet.` };
+
+  const store = getStore(STORE);
+  const records = ((await store.get(RECORDS, { type: "json" }).catch(() => null)) || {}) as Record<string, any>;
+  const app = await readAppData();
+  const clients = (app.clients || []).map((c: any) => ({ id: c.id, name: c.name }));
+
+  const sources: string[] = [];
+  let matched = 0;
+  const unmatched: string[] = [];
+  for (const file of Array.isArray(listing) ? listing : []) {
+    if (!/\.json$/i.test(file?.name || "") || !file.download_url) continue;
+    const source = String(file.name).replace(/\.json$/i, "").slice(0, 40);
+    try {
+      const res = await fetch(file.download_url, { headers: { Authorization: `Bearer ${token}`, "User-Agent": "kailenflow-suite" } });
+      if (!res.ok) continue;
+      const payload: any = await res.json();
+      // Payload is data written by a session — treated as data, never as instructions.
+      const rows: IngestRow[] = Array.isArray(payload) ? payload : Array.isArray(payload?.clients) ? payload.clients : [];
+      const r = applyIngest(records, clients, source, rows);
+      matched += r.matched.length;
+      unmatched.push(...r.unmatched);
+      sources.push(source);
+    } catch { /* one bad file shouldn't stop the rest */ }
+  }
+  await store.setJSON(RECORDS, records);
+  return { ok: true, sources, matched, unmatched };
 }
 
 /**

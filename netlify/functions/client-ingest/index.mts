@@ -1,6 +1,7 @@
 import type { Context, Config } from "@netlify/functions";
 import { getStore } from "@netlify/blobs";
 import { readAppData } from "../../shared/firestore-admin.mts";
+import { applyIngest } from "../../shared/client-ingest-merge.mts";
 
 // INGEST — how a Claude Code session feeds Client Management.
 //
@@ -33,13 +34,11 @@ import { readAppData } from "../../shared/firestore-admin.mts";
 const STORE = "client-crm";
 const RECORDS = "records";
 const RUNS = "ingest-runs";
-const MAX_WORK_PER_SOURCE = 200;
 
 function json(o: any, status = 200) {
   return new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json" } });
 }
 
-const norm = (s: string) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
 export default async (req: Request, _ctx: Context) => {
   const expected = Netlify.env.get("CLIENT_INGEST_TOKEN");
@@ -62,38 +61,8 @@ export default async (req: Request, _ctx: Context) => {
   const app = await readAppData();
   const clients: any[] = app.clients || [];
 
-  const matched: string[] = [], unmatched: string[] = [];
-  for (const row of incoming) {
-    let client = row.clientId ? clients.find((c) => c.id === String(row.clientId)) : null;
-    if (!client && row.match) {
-      const m = norm(row.match);
-      client = clients.find((c) => norm(c.name) === m)
-        || clients.filter((c) => norm(c.name).length > 4 && (norm(c.name).includes(m) || m.includes(norm(c.name))))[0];
-    }
-    if (!client) { unmatched.push(String(row.match || row.clientId || "(unnamed)")); continue; }
-
-    const rec = records[client.id] || {};
-    rec.external = rec.external || {};
-    rec.external[source] = {
-      at: Date.now(),
-      connected: row.connected !== false,
-      status: row.status ? String(row.status).slice(0, 300) : null,
-      fields: row.fields && typeof row.fields === "object" ? row.fields : null,
-    };
-    // Work reported by a session counts toward the activity flags, kept per
-    // source so a re-run replaces that source's items instead of duplicating.
-    if (Array.isArray(row.work)) {
-      rec.externalWork = rec.externalWork || {};
-      rec.externalWork[source] = row.work
-        .filter((w: any) => w && w.at && w.text)
-        .slice(0, MAX_WORK_PER_SOURCE)
-        .map((w: any) => ({ at: String(w.at), kind: String(w.kind || source), text: String(w.text).slice(0, 300) }));
-    }
-    // A tool that reports in is, by definition, connected.
-    if (row.connected !== false) rec.tools = { ...(rec.tools || {}), [source]: true };
-    records[client.id] = rec;
-    matched.push(client.name || client.id);
-  }
+  // Same merge logic as the repo-file path (shared/client-ingest-merge.mts).
+  const { matched, unmatched } = applyIngest(records, clients.map((c: any) => ({ id: c.id, name: c.name })), source, incoming);
 
   await store.setJSON(RECORDS, records);
   const runs = ((await store.get(RUNS, { type: "json" }).catch(() => null)) || []) as any[];

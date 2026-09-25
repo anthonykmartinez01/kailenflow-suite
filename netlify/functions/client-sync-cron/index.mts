@@ -1,5 +1,5 @@
 import type { Context, Config } from "@netlify/functions";
-import { refreshStripeCache, gmailSyncAll, githubSyncAll } from "../../shared/client-sync.mts";
+import { refreshStripeCache, gmailSyncAll, githubSyncAll, ingestFromRepo } from "../../shared/client-sync.mts";
 
 // Nightly autopilot for Client Management: refresh Stripe (who's paying, who's
 // past due) and, if Gmail access happens to be granted, refresh "last
@@ -12,6 +12,12 @@ export default async (_req: Request, _ctx: Context) => {
   const out: any = { at: new Date().toISOString() };
   const stripe = await refreshStripeCache(true);
   out.stripe = stripe.ok ? { customers: stripe.cache?.customers?.length ?? 0 } : { error: stripe.error };
+  try {
+    const ingest = await ingestFromRepo();
+    out.sessionData = ingest.ok ? { sources: ingest.sources, matched: ingest.matched, unmatched: ingest.unmatched?.length || 0 } : { error: ingest.reason };
+  } catch (e: any) {
+    out.sessionData = { error: String(e?.message || e) };
+  }
   try {
     const gh = await githubSyncAll();
     out.github = gh.ok ? { checked: gh.checked, commits: gh.commits, noRepo: gh.noRepo?.length || 0, failed: gh.failed?.length || 0 } : { error: gh.reason };

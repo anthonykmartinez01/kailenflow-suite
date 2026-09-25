@@ -7,7 +7,7 @@ import { assess, rank, DEFAULTS, type ClientInput, type WorkItem } from "../../s
 import { buildWeeklyUpdate, type Item } from "../../shared/client-update-email.mts";
 import { TZ, todayIn, keyStr } from "../../shared/gbp-portfolio-window.mts";
 import { gmailGranted } from "../../shared/gmail.mts";
-import { gmailSyncAll, githubSyncAll } from "../../shared/client-sync.mts";
+import { gmailSyncAll, githubSyncAll, ingestFromRepo } from "../../shared/client-sync.mts";
 
 // CLIENT MANAGEMENT — one place for every client: who's paying, what tools
 // they're connected to, what work has actually been done, when you last
@@ -152,6 +152,12 @@ export default async (req: Request, _ctx: Context) => {
 
     // Gmail sync: read-only search for the most recent message with each
     // client. Never sends, never modifies, never reads message bodies.
+    if (action === "repo-ingest") {
+      const r = await ingestFromRepo();
+      if (!r.ok) return json({ error: r.reason }, 400);
+      return json(r);
+    }
+
     if (action === "github-sync") {
       const r = await githubSyncAll();
       if (!r.ok) return json({ error: r.reason }, 400);
