@@ -11,18 +11,45 @@
 // Without it we can't ask Paige about that client, and we say so rather than
 // guessing a slug from the business name.
 
-const API = "https://www.localmarketingmanager.com/api";
+// The help centre documents www.localmarketingmanager.com/api, but that host
+// serves the marketing site and answers with an HTML 404 page for every API
+// path (confirmed 2026-09-24). The app host answers the API, so both are tried
+// and the one that actually returns JSON is remembered for the rest of the run.
+const BASES = [
+  "https://app.localmarketingmanager.com/api",
+  "https://www.localmarketingmanager.com/api",
+];
+export const API = BASES[0];
+let workingBase: string | null = null;
 
 export function merchyntKey(): string | null {
   return Netlify.env.get("MERCHYNT_API_KEY") || null;
 }
 
+/** An HTML body means we hit a web page, not the API — never treat it as data. */
+function looksLikeHtml(body: string): boolean {
+  return /^\s*<(?:!doctype|html)/i.test(body);
+}
+
+async function fetchApi(base: string, path: string, key: string): Promise<{ status: number; body: string }> {
+  const r = await fetch(`${base}${path}`, { headers: { "x-api-key": key, Accept: "application/json" } });
+  return { status: r.status, body: (await r.text()).slice(0, 4000) };
+}
+
 async function get(path: string, key: string): Promise<any> {
-  const r = await fetch(`${API}${path}`, { headers: { "x-api-key": key, Accept: "application/json" } });
-  if (r.status === 401 || r.status === 403) throw new Error("Merchynt rejected the API key.");
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`Merchynt ${r.status}: ${(await r.text()).slice(0, 160)}`);
-  return r.json();
+  const bases = workingBase ? [workingBase] : BASES;
+  let sawJson404 = false;
+  for (const base of bases) {
+    const { status, body } = await fetchApi(base, path, key);
+    if (status === 401 || status === 403) throw new Error("Merchynt rejected the API key.");
+    if (looksLikeHtml(body)) continue;              // wrong host — try the next
+    if (status === 404) { sawJson404 = true; workingBase = base; continue; } // right host, unknown slug
+    if (status >= 400) throw new Error(`Merchynt ${status}: ${body.slice(0, 160)}`);
+    workingBase = base;
+    try { return JSON.parse(body); } catch { throw new Error(`Merchynt returned a non-JSON body: ${body.slice(0, 120)}`); }
+  }
+  if (sawJson404) return null;
+  throw new Error("No Merchynt API host answered — check the base URL.");
 }
 
 /**
@@ -102,6 +129,35 @@ export async function merchyntSummary(slug: string, key: string): Promise<Merchy
     if (leadsRaw) out.auditLeads = typeof leadsRaw?.total === "number" ? leadsRaw.total : asArray(leadsRaw).length;
   } catch { /* leave null */ }
 
+  return out;
+}
+
+/**
+ * What Paige actually says for each candidate — status code and response
+ * shape, no key, no guessing. Used by the Diagnose button when discovery
+ * finds nothing, so the reason is visible instead of assumed.
+ */
+export async function probeSlugs(name: string, key: string, extra: string[] = []): Promise<{ candidate: string; status: number | "error"; shape: string }[]> {
+  const out: { candidate: string; status: number | "error"; shape: string }[] = [];
+  for (const candidate of [...new Set([...extra.filter(Boolean), ...slugCandidates(name)])].slice(0, 6)) {
+    for (const base of BASES) {
+      const host = new URL(base).host.split(".")[0];
+      try {
+        const { status, body } = await fetchApi(base, `/reviews?slug=${encodeURIComponent(candidate)}`, key);
+        let shape = body ? body.slice(0, 120) : "(empty body)";
+        if (looksLikeHtml(body)) shape = "HTML page (not the API)";
+        else {
+          try {
+            const parsed = JSON.parse(body);
+            shape = Array.isArray(parsed) ? `array(${parsed.length})` : `object{${Object.keys(parsed).slice(0, 8).join(",")}}`;
+          } catch { /* keep the raw snippet */ }
+        }
+        out.push({ candidate: `${host}:${candidate}`, status, shape });
+      } catch (e: any) {
+        out.push({ candidate: `${host}:${candidate}`, status: "error", shape: String(e?.message || e).slice(0, 120) });
+      }
+    }
+  }
   return out;
 }
 

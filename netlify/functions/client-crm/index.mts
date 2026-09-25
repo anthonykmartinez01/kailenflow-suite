@@ -8,6 +8,7 @@ import { buildWeeklyUpdate, type Item } from "../../shared/client-update-email.m
 import { TZ, todayIn, keyStr } from "../../shared/gbp-portfolio-window.mts";
 import { gmailGranted } from "../../shared/gmail.mts";
 import { gmailSyncAll, githubSyncAll, ingestFromRepo, merchyntSyncAll } from "../../shared/client-sync.mts";
+import { merchyntKey, probeSlugs } from "../../shared/merchynt.mts";
 
 // CLIENT MANAGEMENT — one place for every client: who's paying, what tools
 // they're connected to, what work has actually been done, when you last
@@ -156,6 +157,15 @@ export default async (req: Request, _ctx: Context) => {
 
     // Gmail sync: read-only search for the most recent message with each
     // client. Never sends, never modifies, never reads message bodies.
+    if (action === "merchynt-probe") {
+      const key = merchyntKey();
+      if (!key) return json({ error: "MERCHYNT_API_KEY isn't set in Netlify." }, 400);
+      const names = (clients || []).map((c: any) => c.name).filter(Boolean).slice(0, 4);
+      const results: any[] = [];
+      for (const n of names) results.push({ client: n, tried: await probeSlugs(n, key, [String(body.slug || "")]) });
+      return json({ results });
+    }
+
     if (action === "merchynt-sync") {
       const r = await merchyntSyncAll();
       if (!r.ok) return json({ error: r.reason }, 400);

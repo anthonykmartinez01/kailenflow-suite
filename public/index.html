@@ -3178,6 +3178,17 @@ function ClientManagement({data,setActiveClient,setView}){
   };
   const fmtDate=t=>t?new Date(t).toLocaleDateString(undefined,{month:'short',day:'numeric'}):'—';
 
+  // Traffic light — computed server-side (shared/client-health.mts) so the
+  // colour and the flags can never disagree.
+  const DOT={red:'bg-red-500',yellow:'bg-amber-400',green:'bg-green-500',grey:'bg-black/20'};
+  const DOT_LABEL={red:'Really needs attention',yellow:'Needs attention',green:'Healthy',grey:'Paused or churned'};
+  const Dot=({health,flags})=>(
+    <span title={DOT_LABEL[health]+(flags?.length?': '+flags.map(f=>f.detail).join(' '):'')}
+      className={'inline-block w-3 h-3 rounded-full flex-shrink-0 '+(DOT[health]||DOT.grey)}
+      role="img" aria-label={DOT_LABEL[health]}/>
+  );
+  const count=h=>rows.filter(r=>r.health===h).length;
+
   const StatusChip=({status})=>{
     const tone=status==='Past due'?'bg-red-100 text-red-700'
       :status==='Needs setup'?'bg-amber-100 text-amber-800'
@@ -3192,6 +3203,7 @@ function ClientManagement({data,setActiveClient,setView}){
 
   const rows=crm?.clients||[];
   const shown=filter==='attention'?rows.filter(r=>r.attention>0)
+    :filter==='red'?rows.filter(r=>r.health==='red')
     :filter==='setup'?rows.filter(r=>r.status==='Needs setup')
     :filter==='paying'?rows.filter(r=>r.status==='Active'||r.status==='Past due')
     :rows;
@@ -3209,6 +3221,7 @@ function ClientManagement({data,setActiveClient,setView}){
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button onClick={()=>load(true)} disabled={loading} className="touch-target px-3 py-2 rounded-xl text-sm font-medium stitch-glass-card text-deep-obsidian/70 hover:bg-black/5">{loading?'Syncing…':'Sync Stripe'}</button>
+          <button disabled={busy==='probe'} onClick={async()=>{setBusy('probe');setGmailMsg('');try{const j=await api({action:'merchynt-probe'});setGmailMsg('Paige probe — '+j.results.map(r=>r.client+': '+r.tried.map(t=>t.candidate+' → '+t.status+' '+t.shape).join(' | ')).join('  ·  '))}catch(e){setErr(e.message)}finally{setBusy('')}}} className="touch-target px-3 py-2 rounded-xl text-xs font-medium border border-glass-border text-muted-stone hover:bg-black/5">{busy==='probe'?'Probing…':'Diagnose Paige'}</button>
           <button disabled={busy==='merchynt'} onClick={async()=>{setBusy('merchynt');setGmailMsg('');try{const j=await api({action:'merchynt-sync'});setGmailMsg('Paige: '+j.checked+' clients updated'+(j.discovered?.length?' · found '+j.discovered.length+' automatically ('+j.discovered.join(', ')+')':'')+(j.noSlug?.length?' · '+j.noSlug.length+" aren't in Paige":'')+(j.failed?.length?' · '+j.failed.length+' failed':''));await load(false)}catch(e){setErr(e.message)}finally{setBusy('')}}} className="touch-target px-3 py-2 rounded-xl text-sm font-medium stitch-glass-card text-deep-obsidian/70 hover:bg-black/5">{busy==='merchynt'?'Reading Paige…':'Sync Paige'}</button>
           <button disabled={busy==='ingest'} onClick={async()=>{setBusy('ingest');setGmailMsg('');try{const j=await api({action:'repo-ingest'});setGmailMsg(j.sources?.length?('Session data: '+j.sources.join(', ')+' · '+j.matched+' clients updated'+(j.unmatched?.length?' · '+j.unmatched.length+" couldn't be matched by name":'')):(j.reason||'No session data found yet.'));await load(false)}catch(e){setErr(e.message)}finally{setBusy('')}}} className="touch-target px-3 py-2 rounded-xl text-sm font-medium stitch-glass-card text-deep-obsidian/70 hover:bg-black/5">{busy==='ingest'?'Reading…':'Sync session data'}</button>
           <button disabled={busy==='gh'} onClick={async()=>{setBusy('gh');setGmailMsg('');try{const j=await api({action:'github-sync'});setGmailMsg('Websites: '+j.commits+' changes across '+j.checked+' repos'+(j.noRepo?.length?' · '+j.noRepo.length+' clients have no repo connected':''));await load(false)}catch(e){setErr(e.message)}finally{setBusy('')}}} className="touch-target px-3 py-2 rounded-xl text-sm font-medium stitch-glass-card text-deep-obsidian/70 hover:bg-black/5">{busy==='gh'?'Reading GitHub…':'Sync websites'}</button>
@@ -3230,8 +3243,8 @@ function ClientManagement({data,setActiveClient,setView}){
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
           <div className="bg-brand text-white rounded-[24px] p-5 shadow-xl shadow-brand/20">
             <p className="text-[11px] font-semibold uppercase tracking-widest opacity-80">Needs attention</p>
-            <p className="text-3xl font-bold mt-2">{rows.filter(r=>r.attention>0).length}</p>
-            <p className="text-[11px] text-white/80">of {crm.totals.clients} clients</p>
+            <p className="text-3xl font-bold mt-2">{count('red')+count('yellow')}</p>
+            <p className="text-[11px] text-white/80">of {crm.totals.clients} clients · {count('red')} red · {count('yellow')} yellow</p>
           </div>
           {[['Monthly revenue',fmtMoney(crm.totals.mrr)],['Active',crm.totals.active],['Needs setup',crm.totals.needsSetup],['Past due',crm.totals.pastDue]].map(([l,v])=>(
             <div key={l} className="stitch-glass-card rounded-[24px] p-5">
@@ -3267,9 +3280,14 @@ function ClientManagement({data,setActiveClient,setView}){
         )}
 
         <div className="flex flex-wrap gap-2 mb-3">
-          {[['attention','Needs attention'],['all','All clients'],['paying','Paying'],['setup','Needs setup']].map(([k,l])=>(
+          {[['attention','Needs attention'],['red','Urgent'],['all','All clients'],['paying','Paying'],['setup','Needs setup']].map(([k,l])=>(
             <button key={k} onClick={()=>setFilter(k)} aria-pressed={filter===k} className={'touch-target px-3 py-2 rounded-xl text-xs font-semibold '+(filter===k?'bg-brand text-white':'stitch-glass-card text-deep-obsidian/70 hover:bg-black/5')}>{l}</button>
           ))}
+          <span className="flex items-center gap-3 text-[11px] text-muted-stone self-center ml-1">
+            <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500"/>{count('red')} urgent</span>
+            <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-400"/>{count('yellow')} watch</span>
+            <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500"/>{count('green')} healthy</span>
+          </span>
           {crm.stripeAt&&<span className="text-[11px] text-muted-stone self-center">Stripe synced {new Date(crm.stripeAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}</span>}
         </div>
 
@@ -3282,6 +3300,7 @@ function ClientManagement({data,setActiveClient,setView}){
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
+                      <Dot health={r.health} flags={r.flags}/>
                       <button onClick={()=>openClient(r.id)} className="text-sm font-bold text-brand-dark hover:underline">{r.name}</button>
                       <StatusChip status={r.status}/>
                       {r.mrr!=null&&<span className="text-[11px] text-muted-stone">{fmtMoney(r.mrr)}/mo</span>}

@@ -71,6 +71,15 @@ const rows = [
 eq("worst first", rank(rows).map((r) => r.id), ["neglected", "small", "ok"]);
 eq("healthy scores zero", rank(rows)[2].attention, 0);
 
+// Traffic light.
+eq("healthy is green", assess(healthy, NOW, MONTH).health, "green");
+eq("quiet client is yellow", assess(quiet, NOW, MONTH).health, "yellow");
+eq("past due is red", assess(base({ subscriptionStatus: "past_due" }), NOW, MONTH).health, "red");
+eq("never had work is red", assess(base({ touches: [{ at: daysAgo(1), channel: "email" }] }), NOW, MONTH).health, "red");
+eq("badly neglected is red", assess(base({ work: [{ at: daysAgo(70), kind: "p", text: "x" }], touches: [{ at: daysAgo(90), channel: "email" }] }), NOW, MONTH).health, "red");
+eq("churned is grey", assess(base({ subscriptionStatus: "canceled" }), NOW, MONTH).health, "grey");
+eq("paused is grey", assess(base({ targets: { paused: true } }), NOW, MONTH).health, "grey");
+
 // Draft update uses only real logged work.
 const d = draftUpdate("Anthony Martinez", [{ at: daysAgo(3), kind: "p", text: "Published: AC Repair in Prosper" }, { at: daysAgo(40), kind: "p", text: "Too old" }], NOW - 30 * 86400000, NOW);
 eq("draft greets by first name", d.startsWith("Hi Anthony,"), true);

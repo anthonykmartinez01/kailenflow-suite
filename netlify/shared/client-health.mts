@@ -93,6 +93,24 @@ export function assess(c: ClientInput, nowMs: number, monthPrefix: string) {
   const revenueWeight = 1 + Math.min((c.mrr || 0) / 1000, 1);
   const attention = churned || t.paused ? 0 : Math.round(flags.reduce((s, f) => s + f.weight, 0) * revenueWeight);
 
+  // Traffic light, so the state reads at a glance:
+  //   red    — something is actually wrong: money failed, nothing has ever been
+  //            done, or the neglect has stacked up
+  //   yellow — needs attention, but nothing is broken
+  //   green  — healthy
+  //   grey   — deliberately out of scope (churned or paused), never "bad"
+  // Rules, not a score threshold: the score is weighted by revenue (good for
+  // ordering, wrong for colour — a quiet $500 client would jump straight to red
+  // while an identical $100 one stayed yellow).
+  const badlyOverdue =
+    (daysSinceWork != null && daysSinceWork >= t.quietDays * 2) ||
+    (daysSinceTouch != null && daysSinceTouch >= t.contactEveryDays * 2);
+  const health: "red" | "yellow" | "green" | "grey" =
+    churned || t.paused ? "grey"
+    : pastDue || flags.some((f) => f.key === "no-work") || badlyOverdue || flags.length >= 3 ? "red"
+    : flags.length > 0 ? "yellow"
+    : "green";
+
   const status = churned ? "Churned"
     : pastDue ? "Past due"
     : t.paused ? "Paused"
@@ -102,7 +120,7 @@ export function assess(c: ClientInput, nowMs: number, monthPrefix: string) {
     : "Not linked";
 
   return {
-    id: c.id, name: c.name, status, flags, attention,
+    id: c.id, name: c.name, status, health, flags, attention,
     lastWorkAt, lastTouchAt, daysSinceWork, daysSinceTouch,
     workThisMonth, workTarget: t.workPerMonth, openTasks: c.openTasks || 0,
     missingTools, mrr: c.mrr ?? null, subscriptionStatus: c.subscriptionStatus ?? null,
