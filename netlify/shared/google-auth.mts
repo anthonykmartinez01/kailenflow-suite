@@ -186,3 +186,69 @@ export async function getGoogleAccessToken(): Promise<string> {
   })();
   return refreshInFlight;
 }
+
+// ─── Second, SEPARATE Google account: rank-and-rent listings ───────────────
+// Anthony's rank-and-rent GBPs live on a different Gmail than his client work,
+// deliberately, so a problem on one side can't spill into the other. This slot
+// holds that account's refresh token in its OWN key, with its OWN in-memory
+// cache, and is read ONLY by gbp-portfolio. Nothing else in the app falls back
+// to it, and gbp-portfolio never falls back to the main account — mixing the
+// two would defeat the point of keeping them apart.
+const RNR_TOKEN_KEY = "refresh-token-rnr";
+let rnrCached: { token: string; expiresAt: number } | null = null;
+let rnrInFlight: Promise<string> | null = null;
+
+export async function saveRnrRefreshToken(refreshToken: string, email: string | null): Promise<void> {
+  await getStore(STORE_NAME).setJSON(RNR_TOKEN_KEY, { refreshToken, email, savedAt: Date.now() });
+  rnrCached = null;
+  rnrInFlight = null;
+}
+
+export async function rnrConnection(): Promise<{ connected: boolean; email: string | null; savedAt: number | null }> {
+  const saved = (await getStore(STORE_NAME).get(RNR_TOKEN_KEY, { type: "json" }).catch(() => null)) as any;
+  return { connected: !!saved?.refreshToken, email: saved?.email || null, savedAt: saved?.savedAt || null };
+}
+
+export async function disconnectRnr(): Promise<void> {
+  const store = getStore(STORE_NAME);
+  const saved = (await store.get(RNR_TOKEN_KEY, { type: "json" }).catch(() => null)) as any;
+  if (saved?.refreshToken) {
+    // Revoke at Google too, so the grant doesn't linger on that account.
+    await fetch("https://oauth2.googleapis.com/revoke", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token: saved.refreshToken }),
+    }).catch(() => null);
+  }
+  await store.delete(RNR_TOKEN_KEY);
+  rnrCached = null;
+  rnrInFlight = null;
+}
+
+export class RnrNotConnectedError extends Error {}
+
+export async function getRnrAccessToken(): Promise<string> {
+  if (rnrCached && Date.now() < rnrCached.expiresAt) return rnrCached.token;
+  if (rnrInFlight) return rnrInFlight;
+  rnrInFlight = (async () => {
+    try {
+      const saved = (await getStore(STORE_NAME).get(RNR_TOKEN_KEY, { type: "json" })) as { refreshToken: string } | null;
+      if (!saved?.refreshToken) throw new RnrNotConnectedError("Rank-and-rent Google account isn't connected.");
+      const clientId = Netlify.env.get("GOOGLE_OAUTH_CLIENT_ID");
+      const clientSecret = Netlify.env.get("GOOGLE_OAUTH_CLIENT_SECRET");
+      if (!clientId || !clientSecret) throw new Error("GOOGLE_OAUTH_CLIENT_ID/SECRET not configured.");
+      const res = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ client_id: clientId, client_secret: clientSecret, refresh_token: saved.refreshToken, grant_type: "refresh_token" }),
+      });
+      if (!res.ok) throw new Error(`Google token refresh failed: ${res.status} ${(await res.text()).slice(0, 200)}`);
+      const data = await res.json();
+      rnrCached = { token: data.access_token, expiresAt: Date.now() + (data.expires_in || 3600) * 1000 - 60_000 };
+      return data.access_token;
+    } finally {
+      rnrInFlight = null;
+    }
+  })();
+  return rnrInFlight;
+}

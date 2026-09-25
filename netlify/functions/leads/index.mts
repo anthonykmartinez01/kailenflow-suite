@@ -2,7 +2,7 @@ import type { Context, Config } from "@netlify/functions";
 import { getStore } from "@netlify/blobs";
 import { isAuthed, unauthorized } from "../../shared/auth.mts";
 
-// Most Twilio line-type lookups per search that we'll PAY for (new numbers only —
+// Most line-type lookups per search that we'll PAY for (new numbers only —
 // cached numbers are free). Bounds the cost of any single search.
 const MAX_NEW_LOOKUPS = 80;
 
@@ -141,14 +141,74 @@ function toE164(national: string, intl: string): string | null {
   return digits.length >= 8 ? "+" + digits : null;
 }
 
-// Ask Twilio whether a number is a mobile, landline, or VoIP line. A mobile is
-// the best lead (direct shot at the owner). Best-effort + time-limited; returns
-// null on any failure so a slow/failed lookup never breaks the search.
-async function lookupLineType(
-  e164: string,
-  sid: string,
-  token: string
-): Promise<{ type: Lead["lineType"]; carrier: string | null } | null> {
+// Decide whether a number is a mobile, landline or VoIP line. A mobile is the
+// best lead — a direct shot at the owner rather than a receptionist.
+//
+// PRIMARY: ClearoutPhone. Chosen over Twilio 2026-08-03 — cheaper at volume,
+// credits never expire, returns a validity status and E.164 alongside the line
+// type, and (for the separate CSV-filtering feature) it has a real bulk API
+// where Twilio has none. Twilio Lookup is kept as an automatic fallback so
+// nothing breaks if CLEAROUTPHONE_API_TOKEN isn't set yet.
+//
+// Both are best-effort and time-limited: any failure returns null so a slow or
+// broken lookup degrades the result rather than breaking the search.
+type LineTypeResult = { type: Lead["lineType"]; carrier: string | null };
+
+// Maps a provider's line-type string onto our four buckets.
+// ⚠️ "fixed line or mobile" is a REAL ClearoutPhone value and it is genuinely
+// ambiguous. It must map to "unknown", never to landline (which would delete a
+// possibly-good lead) and never to mobile (a false positive the operator would
+// act on). Unknown keeps the lead and simply doesn't get the mobile boost.
+function mapLineType(raw: string): Lead["lineType"] {
+  // VERIFIED LIVE 2026-08-03: ClearoutPhone returns SNAKE_CASE values, e.g.
+  // `toll_free` — not the "Toll-free" shown in their docs. Underscores and
+  // hyphens are flattened to spaces BEFORE matching. Without this,
+  // `fixed_line_or_mobile` misses the "or mobile" check and falls through to
+  // the plain "mobile" test — turning the one genuinely ambiguous value into a
+  // false-positive mobile, which is the worst outcome here.
+  const t = String(raw || "").toLowerCase().replace(/[_-]+/g, " ").replace(/[ 	]+/g, " ").trim();
+  if (!t) return "unknown";
+  if (t.includes("voip")) return "voip";
+  if (t.includes("or mobile")) return "unknown"; // "fixed line or mobile"
+  if (t.includes("mobile") || t === "cell") return "mobile";
+  if (
+    t.includes("landline") || t.includes("fixed") || t.includes("toll") ||
+    t.includes("premium") || t.includes("shared") || t.includes("personal") ||
+    t.includes("pager") || t === "uan"
+  ) return "landline";
+  return "unknown";
+}
+
+async function lookupClearout(e164: string, token: string): Promise<LineTypeResult | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4500);
+    const res = await fetch("https://api.clearoutphone.io/v1/phonenumber/validate", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        // NOTE: ClearoutPhone documents "Bearer:TOKEN" with a COLON, not the
+        // usual space. Don't "fix" this to a space — it fails auth.
+        Authorization: "Bearer:" + token,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ number: e164 }),
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const body = await res.json();
+    // Response is wrapped as { status, data: {...} }; tolerate a flat shape too.
+    const d = body?.data ?? body;
+    if (!d) return null;
+    const lt = d.line_type ?? d.lineType;
+    if (!lt) return null;
+    return { type: mapLineType(String(lt)), carrier: d.carrier ?? null };
+  } catch {
+    return null;
+  }
+}
+
+async function lookupTwilio(e164: string, sid: string, token: string): Promise<LineTypeResult | null> {
   try {
     const url = `https://lookups.twilio.com/v2/PhoneNumbers/${encodeURIComponent(e164)}?Fields=line_type_intelligence`;
     const controller = new AbortController();
@@ -162,12 +222,7 @@ async function lookupLineType(
     const data = await res.json();
     const lti = data.line_type_intelligence;
     if (!lti || !lti.type) return null;
-    const t = String(lti.type).toLowerCase();
-    let type: Lead["lineType"] = "unknown";
-    if (t === "mobile") type = "mobile";
-    else if (t.includes("voip")) type = "voip";
-    else if (t === "landline" || t === "tollfree" || t === "premium" || t === "shared_cost" || t === "uan") type = "landline";
-    return { type, carrier: lti.carrier_name ?? null };
+    return { type: mapLineType(String(lti.type)), carrier: lti.carrier_name ?? null };
   } catch {
     return null;
   }
@@ -950,14 +1005,19 @@ export default async (req: Request, _context: Context) => {
     let landlineHidden = 0;
     let nonMobileHidden = 0;
     let phoneCached = 0, phoneFresh = 0;
+    const coToken = Netlify.env.get("CLEAROUTPHONE_API_TOKEN");
     const twSid = Netlify.env.get("TWILIO_ACCOUNT_SID");
     const twToken = Netlify.env.get("TWILIO_AUTH_TOKEN");
-    if (twSid && twToken) {
+    // ClearoutPhone wins when configured; Twilio remains a silent fallback so
+    // the feature keeps working if the new token hasn't been added yet.
+    const lookupProvider: "clearout" | "twilio" | null =
+      coToken ? "clearout" : (twSid && twToken ? "twilio" : null);
+    if (lookupProvider) {
       const store = getStore("linetype");
       const MAX_AGE = 180 * 86400000; // re-check a number at most ~every 6 months
 
       // 1) Fill line types from the cache first. A number's type doesn't change,
-      //    so once we've looked it up we NEVER pay Twilio for it again.
+      //    so once we've looked it up we NEVER pay for that number again.
       await pool(leads, 30, async (l) => {
         if (!l.phoneE164) return;
         const c = (await store.get("lt:" + l.phoneE164, { type: "json" }).catch(() => null)) as any;
@@ -968,14 +1028,16 @@ export default async (req: Request, _context: Context) => {
 
       // 2) Look up ONLY numbers we've never seen — and cap how many we pay for in
       //    one search. Results are cached so future searches reuse them for free.
-      const twDeadline = Date.now() + (deep ? 12000 : 20000);
+      const lookupDeadline = Date.now() + (deep ? 12000 : 20000);
       const toLookup = leads.filter((l) => l.phoneE164 && !l.lineType).slice(0, MAX_NEW_LOOKUPS);
       await pool(toLookup, 15, async (l) => {
-        if (Date.now() > twDeadline) { partial = true; return; }
-        const lt = await lookupLineType(l.phoneE164 as string, twSid, twToken);
+        if (Date.now() > lookupDeadline) { partial = true; return; }
+        const lt = lookupProvider === "clearout"
+          ? await lookupClearout(l.phoneE164 as string, coToken as string)
+          : await lookupTwilio(l.phoneE164 as string, twSid as string, twToken as string);
         if (!lt) return;
         l.lineType = lt.type; l.carrierName = lt.carrier; phoneFresh++;
-        try { await store.setJSON("lt:" + l.phoneE164, { type: lt.type, carrier: lt.carrier, at: Date.now() }); } catch {}
+        try { await store.setJSON("lt:" + l.phoneE164, { type: lt.type, carrier: lt.carrier, at: Date.now(), via: lookupProvider }); } catch {}
       });
 
       // 3) Apply the mobile/VoIP score boosts now that we know each line type.

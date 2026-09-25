@@ -7,7 +7,13 @@
     "build": "node build.mjs",
     "test:guardrails": "node scripts/test-gbp-guardrails.mjs",
     "test:index-queue": "node scripts/test-index-queue.mjs",
-    "test": "npm run test:guardrails && npm run test:index-queue"
+    "test:portfolio-window": "node scripts/test-gbp-portfolio-window.mjs",
+    "test:portfolio-reviews": "node scripts/test-portfolio-reviews-math.mjs",
+    "test:client-health": "node scripts/test-client-health.mjs",
+    "test:github-work": "node scripts/test-github-work.mjs",
+    "test:update-email": "node scripts/test-client-update-email.mjs",
+    "test:ingest-merge": "node scripts/test-client-ingest-merge.mjs",
+    "test": "npm run test:guardrails && npm run test:index-queue && npm run test:portfolio-window && npm run test:portfolio-reviews && npm run test:client-health && npm run test:github-work && npm run test:update-email && npm run test:ingest-merge"
   },
   "comments": {
     "babel": "@babel/core and @babel/preset-react are build-time only (build.mjs), but live in dependencies rather than devDependencies on purpose: Netlify skips devDependencies whenever NODE_ENV=production, which would fail the deploy build."

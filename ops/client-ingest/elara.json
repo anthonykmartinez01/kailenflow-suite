@@ -1,0 +1,27 @@
+{
+  "source": "elara",
+  "runNote": "Read from the Elara connector on 2026-09-24",
+  "clients": [
+    {
+      "match": "Anytime Heating & Air",
+      "connected": true,
+      "status": "Elara site: 35 pages, staging on elarasites.com, custom domain anytimeairpros.com, last deploy 20 Sept",
+      "fields": {
+        "websiteId": "493a5f3b-6a26-4cbf-a2b4-0fbb3f5b7502",
+        "previewUrl": "https://anytime-heating-and-air.elarasites.com",
+        "customDomain": "anytimeairpros.com",
+        "siteStatus": "staging",
+        "pages": 35
+      },
+      "work": [
+        { "at": "2026-09-21T04:55:26.585Z", "text": "Updated the homepage (AC Repair & HVAC Contractor in Aubrey)", "url": "https://anytime-heating-and-air.elarasites.com/" },
+        { "at": "2026-09-20T00:59:32.862Z", "text": "Updated the Air Conditioning Contractor page", "url": "https://anytime-heating-and-air.elarasites.com/air-conditioning-contractor/" },
+        { "at": "2026-09-20T00:58:55.165Z", "text": "Updated the Heating Contractor & Furnace Repair page", "url": "https://anytime-heating-and-air.elarasites.com/heating-contractor/" },
+        { "at": "2026-09-20T00:58:37.157Z", "text": "Updated the AC Repair & Air Conditioning Service page", "url": "https://anytime-heating-and-air.elarasites.com/air-conditioning-repair-service/" },
+        { "at": "2026-09-20T00:57:37.891Z", "text": "Updated the HVAC Contractor in Providence Village page", "url": "https://anytime-heating-and-air.elarasites.com/hvac-contractor-providence-village/" },
+        { "at": "2026-09-20T00:35:00.178Z", "text": "Built out 35 pages for the migrated website", "url": "https://anytime-heating-and-air.elarasites.com/" },
+        { "at": "2026-09-20T00:22:51.548Z", "text": "Deployed the site", "url": "https://anytime-heating-and-air.elarasites.com" }
+      ]
+    }
+  ]
+}
