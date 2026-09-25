@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — KailenFlow Suite</title>
+<meta name="robots" content="noindex">
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; background: #f7f3ee; color: #1f1b16; font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 48px 24px 64px; }
+  h1 { font-size: 28px; margin: 0 0 4px; }
+  h2 { font-size: 18px; margin: 32px 0 8px; }
+  p, li { color: #3a342d; }
+  .meta { color: #7a7066; font-size: 14px; margin-bottom: 24px; }
+  a { color: #b5532c; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Privacy Policy</h1>
+  <p class="meta">KailenFlow Suite · Effective 24 September 2026</p>
+
+  <p>KailenFlow Suite is a private tool used by its owner, Anthony Martinez. This policy explains what financial data it collects, why, and how it is protected and deleted.</p>
+
+  <h2>Who this covers</h2>
+  <p>The app has a single user: its owner. The only financial data it collects is the owner's own, from accounts the owner chooses to connect.</p>
+
+  <h2>What is collected</h2>
+  <ul>
+    <li><strong>Bank transactions</strong>, through Plaid, only after the owner connects an account and consents in Plaid's own window: date, amount, description, merchant, category and account identifier.</li>
+    <li><strong>Payments received</strong>, from the owner's own Stripe account.</li>
+  </ul>
+  <p>Bank usernames and passwords are never collected — they are entered only in Plaid's window and never reach this app. Account numbers and balances are not stored.</p>
+
+  <h2>Why</h2>
+  <p>To show the owner their monthly income, business and personal expenses, and profit. The data is not used for anything else, and is never sold, shared, or used for advertising.</p>
+
+  <h2>How it is protected</h2>
+  <ul>
+    <li>Encrypted in transit (HTTPS, TLS 1.2 or better) and at rest (AES-256).</li>
+    <li>Available only behind the owner's login, which is protected by 2-Step Verification.</li>
+    <li>Access keys are stored as encrypted server settings and never sent to the browser.</li>
+  </ul>
+
+  <h2>Retention and deletion</h2>
+  <p>Transactions are kept while an account is connected, so monthly history can be shown. Disconnecting an account revokes access at Plaid and immediately deletes every stored transaction from that account.</p>
+
+  <h2>Third parties</h2>
+  <p>Plaid (<a href="https://plaid.com/legal/#end-user-privacy-policy">Plaid's privacy policy</a>) connects the bank account. Netlify hosts the app and its encrypted storage. Stripe provides payment records.</p>
+
+  <h2>Contact</h2>
+  <p>Anthony Martinez — <a href="mailto:anthonykmartinez01@gmail.com">anthonykmartinez01@gmail.com</a></p>
+</main>
+</body>
+</html>

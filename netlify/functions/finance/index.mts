@@ -1,6 +1,6 @@
 import type { Context, Config } from "@netlify/functions";
 import { getStore } from "@netlify/blobs";
-import { isAuthed, unauthorized } from "../../shared/auth.mts";
+import { isAuthed, isOwner, unauthorized, forbidden } from "../../shared/auth.mts";
 import { stripeKey, stripeMonthlyIncome } from "../../shared/stripe.mts";
 import { plaidConfig, connectedBanks, createLinkToken, exchangePublicToken, removeBank, syncTransactions, loadTxns, FINANCE_STORE } from "../../shared/plaid.mts";
 import { classify, merchantKey, monthTotals, typicalMonth, type Override, type Kind } from "../../shared/finance-rules.mts";
@@ -41,6 +41,8 @@ const monthsBack = (fromMonth: string, n: number) => {
 
 export default async (req: Request, _ctx: Context) => {
   if (!(await isAuthed(req))) return unauthorized();
+  // Personal financial data: signed in is not enough, it must be the owner.
+  if (!(await isOwner(req))) return forbidden();
   if (req.method !== "POST") return json({ error: "POST only" }, 405);
   let body: any = {};
   try { body = await req.json(); } catch { /* empty is fine */ }
