@@ -7,7 +7,7 @@ import { assess, rank, DEFAULTS, type ClientInput, type WorkItem } from "../../s
 import { buildWeeklyUpdate, type Item } from "../../shared/client-update-email.mts";
 import { TZ, todayIn, keyStr } from "../../shared/gbp-portfolio-window.mts";
 import { gmailGranted } from "../../shared/gmail.mts";
-import { gmailSyncAll, githubSyncAll, ingestFromRepo } from "../../shared/client-sync.mts";
+import { gmailSyncAll, githubSyncAll, ingestFromRepo, merchyntSyncAll } from "../../shared/client-sync.mts";
 
 // CLIENT MANAGEMENT — one place for every client: who's paying, what tools
 // they're connected to, what work has actually been done, when you last
@@ -25,6 +25,8 @@ import { gmailSyncAll, githubSyncAll, ingestFromRepo } from "../../shared/client
 //   {action:"email", clientId, email}             -> address used to match Gmail
 //   {action:"gmail-sync"}                         -> read-only Gmail search for last contact
 //   {action:"github-sync"}                        -> read-only commit log per client site
+//   {action:"merchynt-sync"}                      -> read-only Paige reviews + audit leads
+//   {action:"merchynt-slug", clientId, slug}      -> that client's Paige slug
 //   {action:"draft", clientId, days}              -> weekly summary email (text + html)
 //
 // READ-ONLY toward Stripe (the same restricted key the EOD report uses) and
@@ -40,6 +42,7 @@ const STRIPE_TTL_MS = 10 * 60 * 1000;
 type Rec = {
   stripeCustomerId?: string | null;
   email?: string | null;
+  merchyntSlug?: string | null;
   // Reported by a Claude Code session via /api/client-ingest, keyed by source.
   external?: Record<string, { at: number; connected: boolean; status: string | null; fields: any }>;
   externalWork?: Record<string, { at: string; kind: string; text: string }[]>;
@@ -115,7 +118,7 @@ export default async (req: Request, _ctx: Context) => {
     const records = await loadRecords();
 
     // ---- writes (our own store only; never Stripe, never client records) ----
-    if (action === "link" || action === "targets" || action === "tools" || action === "touch" || action === "untouch" || action === "email") {
+    if (action === "link" || action === "targets" || action === "tools" || action === "touch" || action === "untouch" || action === "email" || action === "merchynt-slug") {
       const clientId = String(body.clientId || "");
       if (!clientId) return json({ error: "clientId is required" }, 400);
       const rec: Rec = records[clientId] || {};
@@ -125,6 +128,7 @@ export default async (req: Request, _ctx: Context) => {
         if (cid) for (const [id, r] of Object.entries(records)) if (id !== clientId && r.stripeCustomerId === cid) r.stripeCustomerId = null;
         rec.stripeCustomerId = cid;
       }
+      if (action === "merchynt-slug") rec.merchyntSlug = String(body.slug || "").trim().slice(0, 120) || null;
       if (action === "email") rec.email = String(body.email || "").trim().slice(0, 200) || null;
       if (action === "targets") rec.targets = { ...(rec.targets || {}), ...(body.targets || {}) };
       if (action === "tools") rec.tools = { ...(rec.tools || {}), ...(body.tools || {}) };
@@ -152,6 +156,12 @@ export default async (req: Request, _ctx: Context) => {
 
     // Gmail sync: read-only search for the most recent message with each
     // client. Never sends, never modifies, never reads message bodies.
+    if (action === "merchynt-sync") {
+      const r = await merchyntSyncAll();
+      if (!r.ok) return json({ error: r.reason }, 400);
+      return json(r);
+    }
+
     if (action === "repo-ingest") {
       const r = await ingestFromRepo();
       if (!r.ok) return json({ error: r.reason }, 400);
@@ -261,6 +271,7 @@ export default async (req: Request, _ctx: Context) => {
         targets: { ...DEFAULTS, ...(rec.targets || {}) },
         touches: (rec.touches || []).slice(0, 10),
         autoEmail: rec.autoEmail || null,
+        merchyntSlug: rec.merchyntSlug || null,
         external: rec.external || null,
         email: rec.email || null,
         recentWork: input.work.sort((x, y) => Date.parse(y.at) - Date.parse(x.at)).slice(0, 8),

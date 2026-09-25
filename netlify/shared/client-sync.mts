@@ -6,6 +6,7 @@ import { getGoogleAccessToken } from "./google-auth.mts";
 import { recentCommits, githubToken } from "./github-work.mts";
 import { getSiteByClientId } from "./page-publisher/firestore.mts";
 import { applyIngest, type IngestRow } from "./client-ingest-merge.mts";
+import { merchyntKey, merchyntSummary, merchyntStatus } from "./merchynt.mts";
 
 // The unattended half of Client Management: refresh Stripe, and (only if the
 // permission is actually granted) refresh "last contacted" from Gmail. Shared
@@ -91,6 +92,38 @@ export async function ingestFromRepo(): Promise<{ ok: boolean; reason?: string; 
   }
   await store.setJSON(RECORDS, records);
   return { ok: true, sources, matched, unmatched };
+}
+
+/**
+ * Paige (Merchynt) status per client. Needs each client's Paige slug saved in
+ * Client Management — a client without one is reported, never guessed at.
+ */
+export async function merchyntSyncAll(): Promise<{ ok: boolean; reason?: string; checked?: number; noSlug?: string[]; failed?: string[] }> {
+  const key = merchyntKey();
+  if (!key) return { ok: false, reason: "MERCHYNT_API_KEY isn't set in Netlify." };
+  const store = getStore(STORE);
+  const records = ((await store.get(RECORDS, { type: "json" }).catch(() => null)) || {}) as Record<string, any>;
+  const app = await readAppData();
+  const noSlug: string[] = [], failed: string[] = [];
+  let checked = 0;
+
+  for (const client of app.clients || []) {
+    const rec = records[client.id] || {};
+    const slug = String(rec.merchyntSlug || "").trim();
+    if (!slug) { noSlug.push(client.name || client.id); continue; }
+    try {
+      const summary = await merchyntSummary(slug, key);
+      rec.external = rec.external || {};
+      rec.external.merchynt = { at: Date.now(), connected: true, status: merchyntStatus(summary), fields: summary };
+      rec.tools = { ...(rec.tools || {}), merchynt: true };
+      records[client.id] = rec;
+      checked++;
+    } catch {
+      failed.push(client.name || client.id);
+    }
+  }
+  await store.setJSON(RECORDS, records);
+  return { ok: true, checked, noSlug, failed };
 }
 
 /**
