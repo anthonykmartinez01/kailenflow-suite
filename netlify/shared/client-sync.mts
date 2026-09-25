@@ -39,6 +39,10 @@ export async function refreshStripeCache(force = false, ttlMs = 10 * 60 * 1000) 
 // credential involved — no ingest token to create or store.
 const INGEST_DIR = "ops/client-ingest";
 const INGEST_REPO = () => Netlify.env.get("INGEST_REPO") || "anthonykmartinez01/kailenflow-suite";
+// Branch the session commits to. Files on an unmerged branch are invisible
+// to the dashboard until that branch lands, which is easy to mistake for a
+// broken sync — so the branch is explicit rather than implied.
+const INGEST_REF = () => Netlify.env.get("INGEST_REF") || "main";
 
 async function gh(path: string, token: string) {
   const r = await fetch(`https://api.github.com/${path}`, {
@@ -58,7 +62,7 @@ export async function ingestFromRepo(): Promise<{ ok: boolean; reason?: string; 
   const token = githubToken();
   if (!token) return { ok: false, reason: "GITHUB_TOKEN isn't set in Netlify." };
   let listing: any;
-  try { listing = await gh(`repos/${INGEST_REPO()}/contents/${INGEST_DIR}`, token); }
+  try { listing = await gh(`repos/${INGEST_REPO()}/contents/${INGEST_DIR}?ref=${encodeURIComponent(INGEST_REF())}`, token); }
   catch (e: any) { return { ok: false, reason: String(e?.message || e) }; }
   if (!listing) return { ok: true, sources: [], matched: 0, unmatched: [], reason: `No ${INGEST_DIR}/ in the repo yet.` };
 
