@@ -47,6 +47,7 @@ type Rec = {
   // Reported by a Claude Code session via /api/client-ingest, keyed by source.
   external?: Record<string, { at: number; connected: boolean; status: string | null; fields: any }>;
   externalWork?: Record<string, { at: string; kind: string; text: string }[]>;
+  externalTouches?: Record<string, { at: string; channel: string; note: string; direction: string }[]>;
   // Newest email found by Gmail sync. Kept apart from the manual log so a sync
   // can never overwrite something you recorded by hand.
   autoEmail?: { at: string; subject: string; direction: string; with: string } | null;
@@ -263,6 +264,9 @@ export default async (req: Request, _ctx: Context) => {
         // Manual log + whatever Gmail found, merged for "last contacted".
         touches: [
           ...(rec.touches || []),
+          // Contact reported by a session (Paige's automated emails, client replies).
+          ...Object.entries(rec.externalTouches || {}).flatMap(([src, list]) =>
+            (list || []).map((t, i) => ({ id: `${src}-${i}`, at: t.at, channel: t.channel, note: `${t.direction === "from-client" ? "Client replied: " : ""}${t.note}` }))),
           ...(rec.autoEmail ? [{ id: "auto-email", at: rec.autoEmail.at, channel: "email", note: rec.autoEmail.subject }] : []),
         ],
         tools: toolsFor(client, rec),
@@ -279,7 +283,11 @@ export default async (req: Request, _ctx: Context) => {
         website: client.website || "",
         tools: input.tools,
         targets: { ...DEFAULTS, ...(rec.targets || {}) },
-        touches: (rec.touches || []).slice(0, 10),
+        touches: [
+          ...(rec.touches || []),
+          ...Object.entries(rec.externalTouches || {}).flatMap(([src, list]) =>
+            (list || []).map((t, i) => ({ id: `${src}-${i}`, at: t.at, channel: `${t.channel} (${src})`, note: `${t.direction === "from-client" ? "Client replied: " : ""}${t.note}` }))),
+        ].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 10),
         autoEmail: rec.autoEmail || null,
         merchyntSlug: rec.merchyntSlug || null,
         external: rec.external || null,

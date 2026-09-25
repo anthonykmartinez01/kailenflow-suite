@@ -138,14 +138,14 @@ export async function merchyntSyncAll(): Promise<{ ok: boolean; reason?: string;
  * Website work from each client's GitHub repo (via Page Publisher's site
  * record). Read-only: commits are listed, never created.
  */
-export async function githubSyncAll(days = 120): Promise<{ ok: boolean; reason?: string; checked?: number; commits?: number; noRepo?: string[]; failed?: string[] }> {
+export async function githubSyncAll(days = 120): Promise<{ ok: boolean; reason?: string; checked?: number; commits?: number; noRepo?: string[]; failed?: string[]; mismatched?: string[] }> {
   const token = githubToken();
   if (!token) return { ok: false, reason: "GITHUB_TOKEN isn't set in Netlify." };
   const store = getStore(STORE);
   const records = ((await store.get(RECORDS, { type: "json" }).catch(() => null)) || {}) as Record<string, any>;
   const app = await readAppData();
   const since = Date.now() - days * 86400000;
-  const noRepo: string[] = [], failed: string[] = [];
+  const noRepo: string[] = [], failed: string[] = [], mismatched: string[] = [];
   let checked = 0, commits = 0;
 
   for (const client of app.clients || []) {
@@ -154,11 +154,23 @@ export async function githubSyncAll(days = 120): Promise<{ ok: boolean; reason?:
     if (!site?.repo) { noRepo.push(client.name || client.id); continue; }
     try {
       const items = await recentCommits(site.repo, site.branch, since, token);
+      // Is this repo really this client's site? Compare the site's domain with
+      // the website on the client record — a mismatch means work from someone
+      // else's site would be reported as this client's.
+      const host = (u: string) => String(u || "").toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").split(/[/?#]/)[0];
+      const siteHost = host(site.domain || "");
+      const clientHost = host(client.website || "");
+      const matches = !siteHost || !clientHost ? null : siteHost === clientHost;
+      if (matches === false) mismatched.push(`${client.name}: repo ${site.repo} is for ${siteHost}, client website is ${clientHost}`);
       const rec = records[client.id] || {};
       rec.externalWork = rec.externalWork || {};
       rec.externalWork.github = items;
       rec.external = rec.external || {};
-      rec.external.github = { at: Date.now(), connected: true, status: `${site.repo}${items.length ? ` · ${items.length} changes in ${days}d` : " · no recent changes"}`, fields: null };
+      rec.external.github = {
+        at: Date.now(), connected: true,
+        status: `${matches === false ? "⚠ WRONG REPO? " : ""}${site.repo} → ${siteHost || "no domain"}${matches === true ? " ✓ matches client website" : matches === false ? ` (client website is ${clientHost})` : ""}${items.length ? ` · ${items.length} changes in ${days}d` : " · no recent changes"}`,
+        fields: { repo: site.repo, branch: site.branch || null, siteDomain: siteHost || null, clientWebsite: clientHost || null, matches },
+      };
       records[client.id] = rec;
       checked++; commits += items.length;
     } catch {
@@ -166,7 +178,7 @@ export async function githubSyncAll(days = 120): Promise<{ ok: boolean; reason?:
     }
   }
   await store.setJSON(RECORDS, records);
-  return { ok: true, checked, commits, noRepo, failed };
+  return { ok: true, checked, commits, noRepo, failed, mismatched };
 }
 
 /**

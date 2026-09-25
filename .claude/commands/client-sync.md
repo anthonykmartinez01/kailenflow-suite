@@ -44,6 +44,26 @@ the source: `elara.json` shows up as "elara" on each client tile.
 }
 ```
 
+3b. **Paige contact history (Gmail).** Paige copies Anthony on every automated
+   email it sends clients, so Gmail holds the real "last contacted" for Paige
+   clients. Search `from:localmarketingmanager.com newer_than:90d`, match each
+   subject to a client by business name (subjects look like "Pool Clean's
+   Weekly Summary", "What's new at Pool Clean?", "It's been 30 days since your
+   last review", "Please upload more images & videos for Pool Clean"). A
+   subject starting with "Re:" from the client's own address is the CLIENT
+   replying — mark it `"direction": "from-client"`. Write
+   `ops/client-ingest/paige-email.json` with `touches` (not `work`):
+
+```json
+{ "source": "paige-email", "clients": [ { "match": "Pool Clean", "touches": [
+  { "at": "2026-09-22T14:00:00Z", "channel": "email", "note": "Pool Clean's Weekly Summary" },
+  { "at": "2026-09-23T09:10:00Z", "channel": "email", "note": "Re: Pool Clean's Weekly Summary", "direction": "from-client" }
+] } ] }
+```
+
+   Only if the repository is PRIVATE — these files are readable by anyone
+   when it is public. Check with `gh repo view --json visibility` first.
+
 4. **Commit and push** just that file:
 
 ```bash

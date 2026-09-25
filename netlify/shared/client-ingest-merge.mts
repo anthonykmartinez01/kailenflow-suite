@@ -12,6 +12,9 @@ export type IngestRow = {
   connected?: boolean;
   status?: string;
   work?: { at: string; text: string; url?: string; kind?: string }[];
+  // Contact with the client (e.g. Paige's automated emails, or the client's
+  // replies to them). Counts toward "last contacted", not toward work done.
+  touches?: { at: string; channel?: string; note?: string; direction?: "to-client" | "from-client" }[];
   fields?: Record<string, any>;
 };
 
@@ -65,6 +68,18 @@ export function applyIngest(
         .filter((w) => w && w.at && w.text && Number.isFinite(Date.parse(w.at)))
         .slice(0, MAX_WORK_PER_SOURCE)
         .map((w) => ({ at: new Date(w.at).toISOString(), kind: String(w.kind || source), text: String(w.text).slice(0, 300), ...(w.url ? { url: String(w.url) } : {}) }));
+    }
+    if (Array.isArray(row.touches)) {
+      rec.externalTouches = rec.externalTouches || {};
+      rec.externalTouches[source] = row.touches
+        .filter((t) => t && t.at && Number.isFinite(Date.parse(t.at)))
+        .slice(0, MAX_WORK_PER_SOURCE)
+        .map((t) => ({
+          at: new Date(t.at).toISOString(),
+          channel: String(t.channel || "email").slice(0, 20),
+          note: String(t.note || "").slice(0, 200),
+          direction: t.direction === "from-client" ? "from-client" : "to-client",
+        }));
     }
     if (row.connected !== false) rec.tools = { ...(rec.tools || {}), [source]: true };
     records[id] = rec;

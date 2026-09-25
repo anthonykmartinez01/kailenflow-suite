@@ -61,5 +61,19 @@ applyIngest(records, clients, "elara", [{ match: "Higher Power Electric", connec
 eq("connected false respected", records.c3.external.elara.connected, false);
 eq("connected false does not tick the tool", records.c3.tools, undefined);
 
+// Contact history (Paige's automated emails, client replies).
+records = {};
+applyIngest(records, clients, "paige-email", [{ match: "Pool Clean", touches: [
+  { at: "2026-09-22T14:00:00Z", note: "Pool Clean's Weekly Summary" },
+  { at: "2026-09-23T09:00:00Z", note: "Re: Pool Clean's Weekly Summary", direction: "from-client" },
+  { at: "garbage", note: "bad date" },
+] }], now);
+eq("touches stored", records.c2.externalTouches["paige-email"].length, 2);
+eq("client reply keeps its direction", records.c2.externalTouches["paige-email"][1].direction, "from-client");
+eq("default channel is email", records.c2.externalTouches["paige-email"][0].channel, "email");
+eq("touches don't count as work", records.c2.externalWork, undefined);
+applyIngest(records, clients, "paige-email", [{ match: "Pool Clean", touches: [{ at: "2026-09-24T10:00:00Z", note: "What's new at Pool Clean?" }] }], now);
+eq("re-run replaces touches too", records.c2.externalTouches["paige-email"].map((t) => t.note), ["What's new at Pool Clean?"]);
+
 console.log(`\n${pass}/${pass + fail} passed`);
 if (fail) process.exit(1);
