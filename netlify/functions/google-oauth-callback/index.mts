@@ -1,5 +1,15 @@
 import type { Context, Config } from "@netlify/functions";
-import { saveRefreshToken } from "../../shared/google-auth.mts";
+import { getStore } from "@netlify/blobs";
+import { saveRefreshToken, saveRnrRefreshToken } from "../../shared/google-auth.mts";
+import { clearPortfolioStore } from "../../shared/gbp-portfolio-store.mts";
+
+// email claim from the id_token Google returns alongside the tokens (openid
+// email scopes). Only a label so the operator can see WHICH Gmail is connected;
+// it came straight from Google's token endpoint over TLS.
+function emailFromIdToken(idToken: string | undefined): string | null {
+  try { return JSON.parse(Buffer.from(String(idToken).split(".")[1], "base64url").toString()).email || null; }
+  catch { return null; }
+}
 
 // One-time landing page for Google's OAuth redirect. Anthony visits the
 // consent URL once (see indexing-tool memory for the exact link), Google
@@ -17,6 +27,13 @@ export default async (req: Request, _ctx: Context) => {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
   const error = url.searchParams.get("error");
+  const state = url.searchParams.get("state") || "";
+  // "<slot>.<nonce>": "rnr" = the SEPARATE rank-and-rent account (GBP Portfolio
+  // only); "main" = the original client-work account, re-consented with Gmail
+  // read. No state at all = the original manual link, unchanged.
+  const slot = state.includes(".") ? state.split(".")[0] : "";
+  const isRnr = slot === "rnr";
+  const isMain = slot === "main";
 
   if (error) return html(`<h2>Google declined the connection</h2><p>${error}</p>`, 400);
   if (!code) return html(`<h2>Missing authorization code</h2><p>This page should only be reached via a Google consent redirect.</p>`, 400);
@@ -25,6 +42,17 @@ export default async (req: Request, _ctx: Context) => {
   const clientSecret = Netlify.env.get("GOOGLE_OAUTH_CLIENT_SECRET");
   const redirectUri = `${url.origin}/.netlify/functions/google-oauth-callback`;
   if (!clientId || !clientSecret) return html(`<h2>Server not configured</h2><p>Missing GOOGLE_OAUTH_CLIENT_ID/SECRET.</p>`, 500);
+
+  if (isRnr || isMain) {
+    const stateStore = getStore("google-oauth");
+    const key = `${slot}-state`;
+    const saved = (await stateStore.get(key, { type: "json" }).catch(() => null)) as any;
+    await stateStore.delete(key).catch(() => null); // one use only
+    const fresh = saved?.at && Date.now() - saved.at < 15 * 60 * 1000;
+    if (!fresh || `${slot}.${saved.nonce}` !== state) {
+      return html(`<h2>Link expired</h2><p>Go back to the app and get a new connect link.</p>`, 400);
+    }
+  }
 
   try {
     const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
@@ -46,7 +74,17 @@ export default async (req: Request, _ctx: Context) => {
         500
       );
     }
+    if (isRnr) {
+      const email = emailFromIdToken(tokenData.id_token);
+      await saveRnrRefreshToken(tokenData.refresh_token, email);
+      await clearPortfolioStore();
+      return html(`<h2>✅ Rank-and-rent account connected</h2><p>${email ? `Connected <b>${email.replace(/[<>&"]/g, "")}</b>. ` : ""}It is used only by GBP Portfolio. You can close this tab.</p>`);
+    }
     await saveRefreshToken(tokenData.refresh_token);
+    if (isMain) {
+      const email = emailFromIdToken(tokenData.id_token);
+      return html(`<h2>✅ Google account reconnected</h2><p>${email ? `Connected <b>${email.replace(/[<>&"]/g, "")}</b>. ` : ""}Gmail read access is now available for "last contacted". You can close this tab.</p>`);
+    }
     return html(`<h2>✅ Connected</h2><p>Google account linked. You can close this tab.</p>`);
   } catch (e: any) {
     return html(`<h2>Unexpected error</h2><pre>${String(e?.message || e)}</pre>`, 500);

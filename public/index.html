@@ -682,11 +682,14 @@ function Sidebar({clients,activeClient,setActiveClient,view,setView,onAddClient,
     ]},
     {label:'Grow', items:[
       {key:'leadfinder',icon:'search',label:'Lead Finder'},
+      {key:'categoryanalyzer',icon:'category',label:'Category Finder'},
+      {key:'gbpportfolio',icon:'storefront',label:'GBP Portfolio'},
       {key:'callcoach',icon:'call',label:'Call Coach'},
       {key:'eod',icon:'trending_up',label:'End of Day'},
     ]},
     {label:'Clients', items:[
       {key:'overview',icon:'group',label:'All Clients'},
+      {key:'clientmgmt',icon:'contacts',label:'Client Management'},
       {key:'onboarding',icon:'flag',label:'Onboarding',badge:pendingCount||null},
       {key:'pagepublisher',icon:'publish',label:'Page Publisher'},
       {key:'indexing',icon:'travel_explore',label:'Indexing'},
@@ -3132,6 +3135,270 @@ function ClientIndexingTab({client,setData,data}){
 // unlike the Stitch mockup's placeholder stats) — any client-facing use of
 // this app deals with real rankings/tasks, so a fake "+12.4%" badge would
 // be actively misleading.
+// CLIENT MANAGEMENT — every client in one place: who's paying (Stripe), which
+// tools they're connected to, the work actually done for them, when you last
+// reached out, and who needs attention. Backed by /api/client-crm, which is
+// read-only toward Stripe and toward client records; CRM extras (tool ticks,
+// targets, outreach log, Stripe links) live in their own store.
+// Flags come from shared/client-health.mts — see npm run test:client-health.
+function ClientManagement({data,setActiveClient,setView}){
+  const [crm,setCrm]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState('');
+  const [open,setOpen]=useState(null);
+  const [draft,setDraft]=useState(null);
+  const [filter,setFilter]=useState('attention');
+  const [busy,setBusy]=useState('');
+  const [gmailMsg,setGmailMsg]=useState('');
+
+  const api=async(payload)=>{
+    const r=await fetch('/api/client-crm',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(payload)});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||j.error)throw new Error(j.error||'Something went wrong.');
+    return j;
+  };
+  const load=async(fresh)=>{
+    setLoading(true);setErr('');
+    try{setCrm(await api({action:'list',fresh:!!fresh}))}catch(e){setErr(e.message)}
+    finally{setLoading(false)}
+  };
+  useEffect(()=>{load(false)},[]);
+  const act=async(payload,label)=>{
+    setBusy(label||'x');setErr('');
+    try{await api(payload);await load(false)}catch(e){setErr(e.message)}
+    finally{setBusy('')}
+  };
+
+  const fmtMoney=n=>(n==null?'—':'$'+Number(n).toLocaleString(undefined,{maximumFractionDigits:0}));
+  const fmtAgo=(iso,days)=>{
+    if(!iso)return 'never';
+    if(days===0)return 'today';
+    if(days===1)return 'yesterday';
+    return days+' days ago';
+  };
+  const fmtDate=t=>t?new Date(t).toLocaleDateString(undefined,{month:'short',day:'numeric'}):'—';
+
+  const StatusChip=({status})=>{
+    const tone=status==='Past due'?'bg-red-100 text-red-700'
+      :status==='Needs setup'?'bg-amber-100 text-amber-800'
+      :status==='Active'?'bg-green-100 text-green-700'
+      :status==='Churned'?'bg-black/10 text-deep-obsidian/60'
+      :'bg-black/5 text-deep-obsidian/70';
+    return <span className={'inline-block px-2 py-0.5 rounded-full text-[11px] font-semibold '+tone}>{status}</span>;
+  };
+  const FlagChip=({f})=>(
+    <span title={f.detail} className="inline-block px-2 py-0.5 rounded-full text-[11px] font-medium bg-brand/10 text-brand-dark mr-1 mb-1">{f.label}</span>
+  );
+
+  const rows=crm?.clients||[];
+  const shown=filter==='attention'?rows.filter(r=>r.attention>0)
+    :filter==='setup'?rows.filter(r=>r.status==='Needs setup')
+    :filter==='paying'?rows.filter(r=>r.status==='Active'||r.status==='Past due')
+    :rows;
+
+  const openClient=(id)=>{const c=(data.clients||[]).find(x=>x.id===id);if(c){setActiveClient(c.id);setView('dashboard')}};
+
+  const gmailLink=(text)=>'https://mail.google.com/mail/?view=cm&fs=1&su='+encodeURIComponent(draft?.subject||'')+'&body='+encodeURIComponent(text||'');
+
+  return(
+    <div className="fade-in font-manrope">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 mb-6">
+        <div>
+          <h2 className="text-2xl font-bold text-brand-dark">Client Management</h2>
+          <p className="text-sm text-muted-stone mt-1">Who's paying, what's been done, who needs attention — across Stripe, GoHighLevel, Google and this app.</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <button onClick={()=>load(true)} disabled={loading} className="touch-target px-3 py-2 rounded-xl text-sm font-medium stitch-glass-card text-deep-obsidian/70 hover:bg-black/5">{loading?'Syncing…':'Sync Stripe'}</button>
+          <button disabled={busy==='gh'} onClick={async()=>{setBusy('gh');setGmailMsg('');try{const j=await api({action:'github-sync'});setGmailMsg('Websites: '+j.commits+' changes across '+j.checked+' repos'+(j.noRepo?.length?' · '+j.noRepo.length+' clients have no repo connected':''));await load(false)}catch(e){setErr(e.message)}finally{setBusy('')}}} className="touch-target px-3 py-2 rounded-xl text-sm font-medium stitch-glass-card text-deep-obsidian/70 hover:bg-black/5">{busy==='gh'?'Reading GitHub…':'Sync websites'}</button>
+          {crm?.gmail?.granted?(
+            <button disabled={busy==='gmail'} onClick={async()=>{setBusy('gmail');setGmailMsg('');try{const j=await api({action:'gmail-sync'});setGmailMsg(j.needsGmail?'Gmail access has lapsed — reconnect below.':('Checked '+j.checked+' clients'+(j.skipped?.length?' · '+j.skipped.length+' had no email or website to match':'')+(j.failed?.length?' · '+j.failed.length+' failed':'')));await load(false)}catch(e){setErr(e.message)}finally{setBusy('')}}} className="touch-target px-3 py-2 rounded-xl text-sm font-medium stitch-glass-card text-deep-obsidian/70 hover:bg-black/5">{busy==='gmail'?'Reading Gmail…':'Sync Gmail'}</button>
+          ):(
+            <button onClick={async()=>{try{const j=await fetch('/api/google-connect',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({action:'start',slot:'main'})}).then(r=>r.json());if(j.url)window.open(j.url,'_blank','noopener')}catch(e){setErr('Could not start the Google connection.')}}} className="touch-target px-3 py-2 rounded-xl text-sm font-semibold border border-brand text-brand hover:bg-brand/5">Connect Gmail</button>
+          )}
+        </div>
+      </div>
+
+      {err&&<div className="bg-red-50 text-red-700 rounded-xl p-3 text-sm mb-4">{err}</div>}
+      {gmailMsg&&<div className="bg-brand/10 text-brand-dark rounded-xl p-3 text-xs mb-4">{gmailMsg}</div>}
+      {crm&&!crm.gmail?.granted&&<div className="bg-amber-50 text-amber-800 rounded-xl p-3 text-xs mb-4">“Last contact” is filled in by hand until you connect Gmail. Connecting grants read-only access so the app can find the most recent email with each client. Note: Google expires this permission every 7 days while the app is unverified, so it will need reconnecting.</div>}
+      {crm?.stripeError&&<div className="bg-amber-50 text-amber-800 rounded-xl p-3 text-xs mb-4">Stripe: {crm.stripeError}</div>}
+      {loading&&!crm&&<div className="text-center py-12"><div className="inline-block w-8 h-8 border-4 border-brand border-t-transparent rounded-full animate-spin mb-2"/><p className="text-sm text-muted-stone">Loading clients…</p></div>}
+
+      {crm?.totals&&(<>
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
+          <div className="bg-brand text-white rounded-[24px] p-5 shadow-xl shadow-brand/20">
+            <p className="text-[11px] font-semibold uppercase tracking-widest opacity-80">Needs attention</p>
+            <p className="text-3xl font-bold mt-2">{rows.filter(r=>r.attention>0).length}</p>
+            <p className="text-[11px] text-white/80">of {crm.totals.clients} clients</p>
+          </div>
+          {[['Monthly revenue',fmtMoney(crm.totals.mrr)],['Active',crm.totals.active],['Needs setup',crm.totals.needsSetup],['Past due',crm.totals.pastDue]].map(([l,v])=>(
+            <div key={l} className="stitch-glass-card rounded-[24px] p-5">
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-stone">{l}</p>
+              <p className="text-3xl font-bold text-brand-dark mt-2">{v}</p>
+            </div>
+          ))}
+        </div>
+
+        {crm.pending?.length>0&&(
+          <div className="stitch-glass-card rounded-[24px] p-6 mb-4">
+            <h3 className="font-bold text-brand-dark mb-1">Paying in Stripe, not linked yet · {crm.pending.length}</h3>
+            <p className="text-xs text-muted-stone mb-4">Approve each one onto a client, or ignore it if it isn't a client (test charges, one-off payments).</p>
+            <div className="space-y-2">
+              {crm.pending.map(p=>(
+                <div key={p.id} className="border border-glass-border rounded-xl p-3 flex flex-wrap items-center gap-3 justify-between">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-deep-obsidian/90">{p.name||p.email||p.id}</p>
+                    <p className="text-[11px] text-muted-stone">{p.email||'no email'} · {fmtMoney(p.mrr)}/mo · {p.status||'no subscription'}{p.lastPaymentAt?' · last paid '+fmtDate(p.lastPaymentAt):''}</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <select defaultValue={p.suggestedClientId||''} id={'link-'+p.id} className="touch-target text-sm rounded-xl border border-glass-border px-3 py-2 bg-white">
+                      <option value="">Choose client…</option>
+                      {(data.clients||[]).map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                    <button disabled={busy===p.id} onClick={()=>{const v=document.getElementById('link-'+p.id).value;if(!v){setErr('Pick a client first.');return}act({action:'link',clientId:v,stripeCustomerId:p.id},p.id)}} className="touch-target px-3 py-2 rounded-xl text-sm font-semibold bg-brand text-white disabled:opacity-60">Approve</button>
+                    <button disabled={busy===p.id} onClick={()=>act({action:'ignore',stripeCustomerId:p.id},p.id)} className="touch-target px-3 py-2 rounded-xl text-sm font-medium stitch-glass-card text-deep-obsidian/70">Ignore</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-2 mb-3">
+          {[['attention','Needs attention'],['all','All clients'],['paying','Paying'],['setup','Needs setup']].map(([k,l])=>(
+            <button key={k} onClick={()=>setFilter(k)} aria-pressed={filter===k} className={'touch-target px-3 py-2 rounded-xl text-xs font-semibold '+(filter===k?'bg-brand text-white':'stitch-glass-card text-deep-obsidian/70 hover:bg-black/5')}>{l}</button>
+          ))}
+          {crm.stripeAt&&<span className="text-[11px] text-muted-stone self-center">Stripe synced {new Date(crm.stripeAt).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})}</span>}
+        </div>
+
+        {shown.length===0?(
+          <div className="stitch-glass-card rounded-[24px] p-6 text-center text-sm text-muted-stone">{filter==='attention'?'Nothing needs attention right now.':'No clients in this view.'}</div>
+        ):(
+          <div className="space-y-2">
+            {shown.map(r=>(
+              <div key={r.id} className="stitch-glass-card rounded-[24px] p-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button onClick={()=>openClient(r.id)} className="text-sm font-bold text-brand-dark hover:underline">{r.name}</button>
+                      <StatusChip status={r.status}/>
+                      {r.mrr!=null&&<span className="text-[11px] text-muted-stone">{fmtMoney(r.mrr)}/mo</span>}
+                    </div>
+                    <p className="text-[11px] text-muted-stone mt-1">
+                      Last work {fmtAgo(r.lastWorkAt,r.daysSinceWork)} · {r.workThisMonth}/{r.workTarget} this month · last contact {fmtAgo(r.lastTouchAt,r.daysSinceTouch)}{r.openTasks?' · '+r.openTasks+' open task'+(r.openTasks===1?'':'s'):''}
+                    </p>
+                    <div className="mt-2">{r.flags.map(f=><FlagChip key={f.key} f={f}/>)}</div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={async()=>{setDraft({clientId:r.id,name:r.name,text:'Loading…',subject:r.name+"'s Weekly Summary",html:'',warnings:[]});try{const j=await api({action:'draft',clientId:r.id,days:7});setDraft(d=>({...d,text:j.text,html:j.html,subject:j.subject,warnings:j.warnings||[]}))}catch(e){setErr(e.message);setDraft(null)}}} className="touch-target px-3 py-2 rounded-xl text-xs font-semibold border border-brand text-brand hover:bg-brand/5">Draft update</button>
+                    <button onClick={()=>setOpen(open===r.id?null:r.id)} className="touch-target px-3 py-2 rounded-xl text-xs font-medium stitch-glass-card text-deep-obsidian/70">{open===r.id?'Hide':'Details'}</button>
+                  </div>
+                </div>
+
+                {open===r.id&&(
+                  <div className="mt-4 pt-4 border-t border-glass-border grid grid-cols-1 lg:grid-cols-3 gap-5">
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-stone mb-2">Connected tools</p>
+                      <div className="space-y-1">
+                        {r.tools.map(t=>(
+                          <div key={t.key} className="flex items-center justify-between gap-2 text-sm">
+                            <span className={t.connected?'text-deep-obsidian/80':'text-amber-700'}>{t.connected?'✓':'○'} {t.label}</span>
+                            {(t.key==='merchynt'||t.key==='elara')&&(
+                              <button onClick={()=>act({action:'tools',clientId:r.id,tools:{[t.key]:!t.connected}},r.id)} className="touch-target text-[11px] underline text-muted-stone">{t.connected?'mark not connected':'mark connected'}</button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      {r.external&&Object.keys(r.external).length>0&&(
+                        <div className="mt-3 space-y-1">
+                          {Object.entries(r.external).map(([src,v])=>(
+                            <p key={src} className="text-[11px] text-muted-stone"><b className="text-deep-obsidian/70">{src}</b>{v.status?': '+v.status:''} · updated {fmtDate(v.at)}</p>
+                          ))}
+                        </div>
+                      )}
+                      {r.stripe&&<p className="text-[11px] text-muted-stone mt-3">Stripe: {r.stripe.plan||'subscription'}{r.stripe.lastPaymentAt?' · last paid '+fmtDate(r.stripe.lastPaymentAt)+' ('+fmtMoney(r.stripe.lastPaymentAmount)+')':''}{r.stripe.currentPeriodEnd?' · renews '+fmtDate(r.stripe.currentPeriodEnd):''}</p>}
+                    </div>
+
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-stone mb-2">Recent work</p>
+                      {r.recentWork.length===0?<p className="text-sm text-muted-stone">Nothing logged yet.</p>:(
+                        <ul className="space-y-1">
+                          {r.recentWork.map((w,i)=><li key={i} className="text-xs text-deep-obsidian/80">{fmtDate(Date.parse(w.at))} — {w.url?<a href={w.url} target="_blank" rel="noopener noreferrer" className="underline hover:text-brand">{w.text}</a>:w.text}</li>)}
+                        </ul>
+                      )}
+                      <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-stone mt-4 mb-2">Attention rules</p>
+                      <div className="flex flex-wrap items-center gap-2 text-xs">
+                        <label className="flex items-center gap-1">Items/month
+                          <input type="number" min="0" defaultValue={r.targets.workPerMonth} onBlur={e=>act({action:'targets',clientId:r.id,targets:{workPerMonth:Number(e.target.value)}},r.id)} className="w-14 rounded-lg border border-glass-border px-2 py-1"/>
+                        </label>
+                        <label className="flex items-center gap-1">Quiet after
+                          <input type="number" min="1" defaultValue={r.targets.quietDays} onBlur={e=>act({action:'targets',clientId:r.id,targets:{quietDays:Number(e.target.value)}},r.id)} className="w-14 rounded-lg border border-glass-border px-2 py-1"/>d
+                        </label>
+                        <label className="flex items-center gap-1">Check in every
+                          <input type="number" min="1" defaultValue={r.targets.contactEveryDays} onBlur={e=>act({action:'targets',clientId:r.id,targets:{contactEveryDays:Number(e.target.value)}},r.id)} className="w-14 rounded-lg border border-glass-border px-2 py-1"/>d
+                        </label>
+                        <label className="flex items-center gap-1 touch-target">
+                          <input type="checkbox" defaultChecked={!!r.targets.paused} onChange={e=>act({action:'targets',clientId:r.id,targets:{paused:e.target.checked}},r.id)} className="w-4 h-4 accent-brand"/> Paused
+                        </label>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-stone mb-2">Outreach</p>
+                      <label className="block text-xs text-muted-stone mb-2">Client email (for Gmail matching)
+                        <input type="email" defaultValue={r.email||''} placeholder={r.website?('anything@'+r.website.replace(/^https?:\/\/(www\.)?/,'').replace(/\/.*$/,'')):'name@company.com'} onBlur={e=>act({action:'email',clientId:r.id,email:e.target.value},r.id)} className="mt-1 w-full rounded-lg border border-glass-border px-2 py-1 text-sm"/>
+                      </label>
+                      {r.autoEmail&&<p className="text-[11px] text-muted-stone mb-2">Gmail: {r.autoEmail.direction==='sent'?'you emailed':'they emailed'} {fmtDate(Date.parse(r.autoEmail.at))} — “{r.autoEmail.subject}”</p>}
+                      <div className="flex flex-wrap gap-2 mb-2">
+                        {['email','text','call'].map(ch=>(
+                          <button key={ch} disabled={busy===r.id} onClick={()=>act({action:'touch',clientId:r.id,channel:ch},r.id)} className="touch-target px-3 py-2 rounded-xl text-xs font-medium border border-glass-border hover:bg-black/5">Log {ch}</button>
+                        ))}
+                      </div>
+                      {r.touches.length===0?<p className="text-sm text-muted-stone">No outreach logged.</p>:(
+                        <ul className="space-y-1">
+                          {r.touches.map(t=><li key={t.id} className="text-xs text-deep-obsidian/80">{fmtDate(Date.parse(t.at))} — {t.channel}{t.note?': '+t.note:''}</li>)}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </>)}
+
+      {draft&&(
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center p-4 z-50" onClick={()=>setDraft(null)}>
+          <div className="bg-white rounded-[24px] p-6 max-w-2xl w-full max-h-[85vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
+            <h3 className="font-bold text-brand-dark mb-1">Update for {draft.name}</h3>
+            <p className="text-xs text-muted-stone mb-3">Weekly summary built from work actually logged in the last 7 days, plus anything already scheduled for the next 7. Nothing sends by itself — you send it.</p>
+            {draft.warnings?.length>0&&<div className="bg-amber-50 text-amber-800 rounded-xl p-3 text-xs mb-3"><b>Deliverability:</b> {draft.warnings.join(' · ')}</div>}
+            <input value={draft.subject} onChange={e=>setDraft(d=>({...d,subject:e.target.value}))} className="w-full rounded-xl border border-glass-border px-3 py-2 text-sm mb-2" placeholder="Subject"/>
+            <textarea value={draft.text} onChange={e=>setDraft(d=>({...d,text:e.target.value}))} rows="12" className="w-full rounded-xl border border-glass-border px-3 py-2 text-sm font-mono"/>
+            <div className="flex flex-wrap gap-2 mt-3">
+              <a href={gmailLink(draft.text)} target="_blank" rel="noopener noreferrer" onClick={()=>act({action:'touch',clientId:draft.clientId,channel:'email',note:'Drafted in Gmail'},draft.clientId)} className="touch-target px-4 py-2 rounded-xl text-sm font-semibold bg-brand text-white">Open in Gmail</a>
+              <button onClick={async()=>{
+                // Rich clipboard so pasting into Gmail keeps the layout; falls
+                // back to plain text where ClipboardItem isn't available.
+                try{
+                  if(draft.html&&window.ClipboardItem){
+                    await navigator.clipboard.write([new ClipboardItem({'text/html':new Blob([draft.html],{type:'text/html'}),'text/plain':new Blob([draft.text],{type:'text/plain'})})]);
+                  }else{await navigator.clipboard.writeText(draft.text)}
+                  setGmailMsg('Formatted update copied — paste it into Gmail.');
+                }catch(e){setErr('Could not copy — select the text and copy manually.')}
+              }} className="touch-target px-4 py-2 rounded-xl text-sm font-semibold border border-brand text-brand">Copy formatted</button>
+              <button onClick={()=>{navigator.clipboard.writeText(draft.text).catch(()=>{});act({action:'touch',clientId:draft.clientId,channel:'text',note:'Copied for text'},draft.clientId)}} className="touch-target px-4 py-2 rounded-xl text-sm font-medium stitch-glass-card text-deep-obsidian/70">Copy for text</button>
+              <button onClick={()=>setDraft(null)} className="touch-target px-4 py-2 rounded-xl text-sm font-medium stitch-glass-card text-deep-obsidian/70">Close</button>
+            </div>
+            <p className="text-[11px] text-muted-stone mt-2">“Open in Gmail” prefills plain text (the most deliverable format) — add the address there, and use Gmail's own Schedule send to send it later. “Copy formatted” keeps the headings and links when you paste into Gmail.</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AllClientsOverview({data,setActiveClient,setView}){
   const clients=data.clients||[];
   const totalClients=clients.length;
@@ -11316,10 +11583,13 @@ function AuthenticatedApp(){
           {view==='onboarding'&&<OnboardingView data={data} setData={setData} activeClient={activeClient} setView={setView}/>}
           {view==='calendar'&&<CalendarView data={data} setData={setData}/>}
           {view==='overview'&&<AllClientsOverview data={data} setActiveClient={setActiveClient} setView={()=>setView('dashboard')}/>}
+          {view==='clientmgmt'&&<ClientManagement data={data} setActiveClient={setActiveClient} setView={setView}/>}
           {view==='reports'&&<ReportsTab data={data} setData={setData}/>}
           {view==='prompts'&&<PromptsLibrary data={data} setData={setData}/>}
           {view==='eod'&&<EndOfDay data={data} setData={setData}/>}
           {view==='leadfinder'&&<LeadFinder data={data} setData={setData}/>}
+          {view==='categoryanalyzer'&&<CategoryAnalyzer/>}
+          {view==='gbpportfolio'&&<GbpPortfolio/>}
           {view==='callcoach'&&<CallCoach data={data} setData={setData}/>}
           {view==='pagepublisher'&&<PagePublisherView data={data} setData={setData}/>}
           {view==='indexing'&&<IndexingDashboard data={data} setData={setData}/>}
@@ -11987,6 +12257,615 @@ class ErrorBoundary extends React.Component{
       </div>
     );
   }
+}
+
+// STANDALONE GBP category finder — no client record involved, same as Lead
+// Finder. Answers: for this niche in this city, what does the field actually
+// use as its PRIMARY category, and which secondary categories are common
+// enough to be worth adding?
+//
+// Backed by /api/gbp-category-analyzer. DataForSEO credentials live on the
+// SERVER — unlike the per-client Competitor Category Analysis in the GBP tab,
+// which asks the operator to paste a login/password into the browser.
+//
+// ⚠️ The primary/secondary split is the whole point and must not be flattened
+// into a single ranked list. Verified live 2026-09-08 on pool cleaning in
+// Celina TX: "Service establishment" is carried by 48% of the field and used
+// as PRIMARY by exactly ZERO of them. A tool that only counted occurrences
+// would rank it 3rd and imply it were a candidate primary. It is not.
+function CategoryAnalyzer(){
+  const [niche,setNiche]=useState('');
+  const [city,setCity]=useState('');
+  const [stateCode,setStateCode]=useState('');
+  const [radiusKm,setRadiusKm]=useState(25);
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState('');
+  const [res,setRes]=useState(null);
+
+  const run=async()=>{
+    if(!niche.trim()||!city.trim()){setErr('Enter a niche and a city.');return}
+    setLoading(true);setErr('');setRes(null);
+    try{
+      const r=await fetch('/api/gbp-category-analyzer',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),
+        body:JSON.stringify({category:niche.trim(),city:city.trim(),state:stateCode.trim(),radiusKm})});
+      const j=await r.json();
+      if(!r.ok||j.error){setErr((j.error||'Something went wrong.')+(j.hint?' '+j.hint:''));return}
+      setRes(j);
+    }catch(e){setErr('Network error — try again.')}
+    finally{setLoading(false)}
+  };
+
+  const Bar=({pct,strong})=>(
+    <div className="h-1.5 w-full rounded-full bg-black/[0.06] overflow-hidden">
+      <div className={'h-full rounded-full '+(strong?'bg-brand':'bg-brand/40')} style={{width:Math.max(2,pct)+'%'}}/>
+    </div>
+  );
+
+  return(
+    <div className="fade-in font-manrope">
+      <div className="mb-6">
+        <h2 className="text-2xl font-bold text-brand-dark">Category Finder</h2>
+        <p className="text-sm text-muted-stone mt-1">For a niche in a city, see which category the field uses as its primary — and which secondary categories are common enough to add.</p>
+      </div>
+
+      <div className="stitch-glass-card rounded-[24px] p-6 mb-4">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
+          <div className="md:col-span-5">
+            <label className="text-xs font-medium text-muted-stone block mb-1">Niche or category</label>
+            <input value={niche} onChange={e=>setNiche(e.target.value)} onKeyDown={e=>e.key==='Enter'&&run()}
+              placeholder="pool cleaning service" className="touch-target w-full px-3 py-2 border border-glass-border rounded-xl text-sm focus:ring-1 focus:ring-brand focus:outline-none"/>
+          </div>
+          <div className="md:col-span-4">
+            <label className="text-xs font-medium text-muted-stone block mb-1">City</label>
+            <input value={city} onChange={e=>setCity(e.target.value)} onKeyDown={e=>e.key==='Enter'&&run()}
+              placeholder="Celina" className="touch-target w-full px-3 py-2 border border-glass-border rounded-xl text-sm focus:ring-1 focus:ring-brand focus:outline-none"/>
+          </div>
+          <div className="md:col-span-1">
+            <label className="text-xs font-medium text-muted-stone block mb-1">State</label>
+            <input value={stateCode} onChange={e=>setStateCode(e.target.value)} onKeyDown={e=>e.key==='Enter'&&run()}
+              placeholder="TX" maxLength={2} className="touch-target w-full px-3 py-2 border border-glass-border rounded-xl text-sm uppercase focus:ring-1 focus:ring-brand focus:outline-none"/>
+          </div>
+          <div className="md:col-span-2 flex items-end">
+            <button onClick={run} disabled={loading}
+              className={'touch-target w-full px-4 py-2 rounded-xl text-sm font-semibold transition-all '+(loading?'bg-gray-300 text-gray-500 cursor-wait':'bg-brand text-white hover:bg-brand-hover shadow-lg shadow-brand/20')}>
+              {loading?'Analyzing…':'Analyze'}
+            </button>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 mt-3">
+          <label className="text-xs text-muted-stone">Radius</label>
+          <input type="range" min={5} max={80} step={5} value={radiusKm} onChange={e=>setRadiusKm(Number(e.target.value))} className="flex-1 accent-brand max-w-xs"/>
+          <span className="text-xs font-medium text-deep-obsidian/70 w-16">{radiusKm} km</span>
+        </div>
+      </div>
+
+      {err&&<div className="bg-red-50 text-red-700 rounded-xl p-3 text-sm mb-4">{err}</div>}
+
+      {loading&&<div className="text-center py-12"><div className="inline-block w-8 h-8 border-4 border-brand border-t-transparent rounded-full animate-spin mb-2"/><p className="text-sm text-muted-stone">Reading competitor categories…</p></div>}
+
+      {res&&!loading&&(<>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+          <div className="bg-brand rounded-[24px] p-6 text-white shadow-xl shadow-brand/20 flex flex-col min-h-[130px]">
+            <p className="text-[11px] font-semibold opacity-80 uppercase tracking-widest">Use as primary</p>
+            <div className="mt-auto pt-3">
+              <h3 className="text-xl font-bold leading-tight">{res.mostCommonPrimary?res.mostCommonPrimary.name:'—'}</h3>
+              {res.mostCommonPrimary&&<p className="text-[11px] opacity-70 mt-1">{res.mostCommonPrimary.usedAsPrimaryBy} of {res.mostCommonPrimary.of} businesses use this as their primary</p>}
+            </div>
+          </div>
+          <div className="stitch-glass-card rounded-[24px] p-6 flex flex-col min-h-[130px]">
+            <p className="text-[11px] font-semibold text-muted-stone uppercase tracking-widest">Businesses analyzed</p>
+            <div className="mt-auto pt-3">
+              <h3 className="text-4xl font-bold tracking-tight text-brand-dark">{res.totalBusinesses}</h3>
+              <p className="text-[11px] text-muted-stone mt-1">{res.businessesWithCategoryData} had category data{res.businessesWithCategoryData<res.totalBusinesses?' — percentages below rest on that smaller number':''}</p>
+            </div>
+          </div>
+          <div className="stitch-glass-card rounded-[24px] p-6 flex flex-col min-h-[130px]">
+            <p className="text-[11px] font-semibold text-muted-stone uppercase tracking-widest">Secondary to add</p>
+            <div className="mt-auto pt-3">
+              <h3 className="text-4xl font-bold tracking-tight text-brand-dark">{res.suggestedSecondary.length}</h3>
+              <p className="text-[11px] text-muted-stone mt-1">carried by 25%+ of the field</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="stitch-glass-card rounded-[24px] p-6 mb-4">
+          <div className="flex items-baseline justify-between gap-3 mb-1 flex-wrap">
+            <h3 className="font-bold text-brand-dark">Categories used by the field</h3>
+            <span className="text-xs text-muted-stone">matched {res.matchedCategory} · {res.radiusKm}km of {res.where}</span>
+          </div>
+          <p className="text-xs text-muted-stone mb-4">A category can be common WITHOUT being anyone's primary. The primary count is the column that tells you what to set yours to.</p>
+          <div className="space-y-3">
+            {res.rankedCategories.map((c,i)=>(
+              <div key={c.name} className="flex items-center gap-3">
+                <span className="text-xs text-muted-stone w-6 flex-shrink-0">#{i+1}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-baseline justify-between gap-2 mb-1 flex-wrap">
+                    <span className="text-sm font-medium text-deep-obsidian/85">{c.name}
+                      {c.asPrimary>0
+                        ?<span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-brand/10 text-brand font-semibold">primary for {c.asPrimary}</span>
+                        :<span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-black/[0.05] text-muted-stone font-medium">never primary</span>}
+                    </span>
+                    <span className="text-xs text-muted-stone flex-shrink-0">{c.total}/{res.totalBusinesses} · {c.pctOfCompetitors}%</span>
+                  </div>
+                  <Bar pct={c.pctOfCompetitors} strong={c.asPrimary>0}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {res.suggestedSecondary.length>0&&(
+          <div className="stitch-glass-card rounded-[24px] p-6">
+            <h3 className="font-bold text-brand-dark mb-1">Secondary categories worth adding</h3>
+            <p className="text-xs text-muted-stone mb-3">Carried by at least a quarter of the field, and not the primary.</p>
+            <div className="flex flex-wrap gap-2">
+              {res.suggestedSecondary.map(c=>(
+                <span key={c.name} className="text-sm px-3 py-1.5 rounded-xl bg-brand/10 text-brand-dark font-medium">{c.name} <span className="text-xs text-muted-stone">{c.pctOfCompetitors}%</span></span>
+              ))}
+            </div>
+          </div>
+        )}
+      </>)}
+    </div>
+  );
+}
+
+// PORTFOLIO REVIEWS — review history for GBP Portfolio's selected listings:
+// gained today / yesterday, total now, a portfolio-total chart, per-listing
+// gains and losses, and a log of reviews that dropped (didn't stick).
+// Backed by /api/portfolio-reviews: public Places review counts only, scanned
+// every 3 hours plus on "Refresh (live scan)". Google offers no review-count
+// history, so tracking starts from the first scan — it can't be backfilled.
+// Gained and lost are summed separately, so a +3/−1 day shows both.
+function PortfolioReviews(){
+  const RANGES=['1D','7D','30D','3M','6M','1Y','All'];
+  const [range,setRange]=useState('30D');
+  const [data,setData]=useState(null);
+  const [loading,setLoading]=useState(false);
+  const [scanning,setScanning]=useState(false);
+  const [err,setErr]=useState('');
+  const [hover,setHover]=useState(null);
+  const [showTable,setShowTable]=useState(false);
+  const wantRange=useRef('30D');
+  const chartBox=useRef(null);
+  const [chartW,setChartW]=useState(600);
+
+  useEffect(()=>{
+    if(!chartBox.current||typeof ResizeObserver==='undefined')return;
+    const ro=new ResizeObserver(es=>{const w=Math.round(es[0].contentRect.width);if(w>0)setChartW(w)});
+    ro.observe(chartBox.current);
+    return()=>ro.disconnect();
+  },[data]);
+
+  const call=async(action,r)=>{
+    wantRange.current=r;
+    const res=await fetch('/api/portfolio-reviews',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify({action,range:r})});
+    const j=await res.json().catch(()=>({}));
+    if(!res.ok||j.error)throw new Error(j.error||'Something went wrong.');
+    if(wantRange.current===r){setData(j);setErr('')}
+  };
+  const load=async(r)=>{setLoading(true);try{await call('history',r)}catch(e){setErr(e.message)}finally{setLoading(false)}};
+  const scan=async()=>{setScanning(true);try{await call('scan',range)}catch(e){setErr(e.message)}finally{setScanning(false)}};
+  useEffect(()=>{setHover(null);load(range)},[range]);
+
+  const fmtN=n=>(n==null?'—':Number(n).toLocaleString());
+  const signed=n=>(n>0?'+':n<0?'−':'')+Math.abs(n).toLocaleString();
+  const fmtWhen=t=>typeof t==='number'
+    ?new Date(t).toLocaleTimeString([], {hour:'numeric',minute:'2-digit'})
+    :new Date(t+'T12:00:00').toLocaleDateString([], {month:'short',day:'numeric',year:range==='1Y'||range==='All'?'numeric':undefined});
+
+  const Tile=({label,value,sub,filled})=>(
+    <div className={(filled?'bg-brand text-white shadow-xl shadow-brand/20':'stitch-glass-card')+' rounded-[24px] p-5 flex flex-col min-h-[112px]'}>
+      <p className={'text-[11px] font-semibold uppercase tracking-widest '+(filled?'opacity-80':'text-muted-stone')}>{label}</p>
+      <p className={'mt-auto pt-2 text-3xl font-bold tracking-tight '+(filled?'':'text-brand-dark')}>{value}</p>
+      {sub&&<p className={'text-[11px] '+(filled?'text-white/80':'text-muted-stone')}>{sub}</p>}
+    </div>
+  );
+
+  // ---- chart geometry: one series, zero baseline, 2px line, hover crosshair ----
+  const series=data?.series||[];
+  const H=240,padL=40,padR=16,padT=16,padB=28;
+  const W=Math.max(280,chartW);
+  const maxY=Math.max(1,...series.map(p=>p.total));
+  const niceMax=(()=>{const step=Math.pow(10,Math.floor(Math.log10(maxY)));const m=Math.ceil(maxY*1.1/step)*step;return Math.max(m,4)})();
+  const x=i=>padL+(series.length<=1?(W-padL-padR)/2:i*(W-padL-padR)/(series.length-1));
+  const y=v=>padT+(H-padT-padB)*(1-v/niceMax);
+  const linePath=series.map((p,i)=>(i?'L':'M')+x(i).toFixed(1)+' '+y(p.total).toFixed(1)).join(' ');
+  const areaPath=series.length?linePath+' L'+x(series.length-1).toFixed(1)+' '+y(0)+' L'+x(0).toFixed(1)+' '+y(0)+' Z':'';
+  const ticks=[0,1,2,3,4].map(k=>Math.round(niceMax*k/4));
+  const xLabelIdx=series.length<=1?[0]:[0,Math.floor((series.length-1)/2),series.length-1];
+  const onMove=e=>{
+    if(!series.length)return;
+    const r=e.currentTarget.getBoundingClientRect();
+    const px=(e.clientX-r.left)*(W/r.width);
+    let best=0;series.forEach((p,i)=>{if(Math.abs(x(i)-px)<Math.abs(x(best)-px))best=i});
+    setHover(best);
+  };
+
+  const s=data?.summary;
+  const hp=hover!=null?series[hover]:null;
+
+  return(
+    <div className="stitch-glass-card rounded-[24px] p-6 mt-4">
+      <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-3 mb-5">
+        <div className="min-w-0">
+          <h3 className="font-bold text-brand-dark text-lg">Reviews</h3>
+          <p className="text-xs text-muted-stone mt-1 max-w-xl">Total Google reviews across your selected profiles. Scanned every 3 hours; “Gained today” counts since midnight Central. Drops are reviews that were counted and then disappeared.</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 min-w-0 xl:justify-end">
+          {RANGES.map(r=>(
+            <button key={r} onClick={()=>setRange(r)} aria-pressed={range===r} className={'touch-target px-3 py-2 rounded-xl text-xs font-semibold '+(range===r?'bg-brand text-white':'border border-glass-border text-deep-obsidian/70 hover:bg-black/5')}>{r}</button>
+          ))}
+          <button onClick={scan} disabled={scanning} className="touch-target px-3 py-2 rounded-xl text-xs font-semibold border border-brand text-brand hover:bg-brand/5 disabled:opacity-60">{scanning?'Scanning…':'↻ Refresh (live scan)'}</button>
+          {data?.lastScanAt&&<span className="text-[11px] text-muted-stone">Scanned {new Date(data.lastScanAt).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})}</span>}
+        </div>
+      </div>
+
+      {err&&<div className="bg-red-50 text-red-700 rounded-xl p-3 text-sm mb-4">{err}</div>}
+      {data?.scan?.failed?.length>0&&<div className="bg-amber-50 text-amber-800 rounded-xl p-3 text-xs mb-4">Couldn't reach Google for {data.scan.failed.join(', ')} on the last live scan — their last known counts are kept, not counted as drops.</div>}
+      {loading&&!data&&<p className="text-sm text-muted-stone py-6">Loading review history…</p>}
+      {data?.needsSelection&&<p className="text-sm text-muted-stone py-6">No listings picked yet — use Choose listings above.</p>}
+
+      {s&&!data.trackingSince&&(
+        <div className="text-center py-8">
+          <p className="text-sm text-muted-stone mb-3">No review history yet. Google doesn't provide past review counts, so tracking starts with your first scan.</p>
+          <button onClick={scan} disabled={scanning} className="touch-target px-4 py-2 rounded-xl text-sm font-semibold bg-brand text-white disabled:opacity-60">{scanning?'Scanning…':'Start tracking now'}</button>
+        </div>
+      )}
+
+      {s&&data.trackingSince&&(<>
+        <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,5fr)_minmax(0,8fr)] gap-4">
+          <div className="grid grid-cols-2 gap-3 content-start">
+            <div className="col-span-2"><Tile filled label="Gained today" value={signed(s.today.net)} sub={s.today.gained+' new · '+s.today.lost+' dropped · since midnight CT'}/></div>
+            <Tile label="Total reviews now" value={fmtN(s.totalNow)}/>
+            <Tile label="Gained yesterday" value={signed(s.yesterday.net)} sub={s.yesterday.gained+' new · '+s.yesterday.lost+' dropped'}/>
+            <Tile label={'Dropped · '+range} value={fmtN(s.range.lost)} sub={'vs '+s.range.gained+' gained · net '+signed(s.range.net)}/>
+            <Tile label="Profiles tracked" value={s.profilesTracked+(s.profilesTracked!==s.profilesSelected?' / '+s.profilesSelected:'')}/>
+          </div>
+
+          <div>
+            <div className="flex items-baseline justify-between mb-2">
+              <p className="text-sm font-bold text-brand-dark">Portfolio total over time</p>
+              <button onClick={()=>setShowTable(v=>!v)} className="touch-target text-[11px] text-muted-stone underline">{showTable?'Show chart':'Show as table'}</button>
+            </div>
+            {showTable?(
+              <div className="overflow-x-auto max-h-[260px] overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead><tr className="text-muted-stone text-left"><th className="py-1 pr-4 font-semibold">{range==='1D'?'Time':'Date'}</th><th className="py-1 font-semibold text-right">Total reviews</th></tr></thead>
+                  <tbody>{series.map((p,i)=><tr key={i} className="border-t border-glass-border"><td className="py-1 pr-4">{fmtWhen(p.t)}</td><td className="py-1 text-right font-semibold">{fmtN(p.total)}</td></tr>)}</tbody>
+                </table>
+              </div>
+            ):(
+              <div ref={chartBox} className="relative w-full">
+                {series.length===0?<p className="text-sm text-muted-stone py-10 text-center">No scans in this range yet.</p>:(
+                  <svg viewBox={'0 0 '+W+' '+H} width="100%" height={H} className="text-brand block" role="img" aria-label={'Portfolio review total, '+range+': '+series[0].total+' to '+series[series.length-1].total} onMouseMove={onMove} onMouseLeave={()=>setHover(null)}>
+                    <defs><linearGradient id="pfRevFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="currentColor" stopOpacity="0.22"/><stop offset="100%" stopColor="currentColor" stopOpacity="0"/></linearGradient></defs>
+                    {ticks.map(t=>(<g key={t}>
+                      <line x1={padL} x2={W-padR} y1={y(t)} y2={y(t)} stroke="rgba(0,0,0,0.07)" strokeWidth="1"/>
+                      <text x={padL-8} y={y(t)+4} textAnchor="end" fontSize="10" fill="#8a847c">{t}</text>
+                    </g>))}
+                    {xLabelIdx.map((i,k)=>(
+                      <text key={k} x={x(i)} y={H-8} fontSize="10" fill="#8a847c" textAnchor={k===0&&xLabelIdx.length>1?'start':k===xLabelIdx.length-1&&xLabelIdx.length>1?'end':'middle'}>{i===series.length-1&&range!=='1D'?'Today':fmtWhen(series[i].t)}</text>
+                    ))}
+                    <path d={areaPath} fill="url(#pfRevFill)"/>
+                    <path d={linePath} fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" strokeLinecap="round"/>
+                    {series.length<=31&&series.map((p,i)=><circle key={i} cx={x(i)} cy={y(p.total)} r="4" fill="#fff" stroke="currentColor" strokeWidth="2"/>)}
+                    <circle cx={x(series.length-1)} cy={y(series[series.length-1].total)} r="4" fill="currentColor" stroke="#fff" strokeWidth="2"/>
+                    {hp&&(<g>
+                      <line x1={x(hover)} x2={x(hover)} y1={padT} y2={H-padB} stroke="rgba(0,0,0,0.25)" strokeWidth="1" strokeDasharray="3 3"/>
+                      <circle cx={x(hover)} cy={y(hp.total)} r="5" fill="currentColor" stroke="#fff" strokeWidth="2"/>
+                    </g>)}
+                  </svg>
+                )}
+                {hp&&(
+                  <div className="pointer-events-none absolute top-2 bg-white rounded-xl shadow-lg border border-glass-border px-3 py-2 text-xs" style={{left:Math.min(Math.max(0,(x(hover)/W)*100-10),70)+'%'}}>
+                    <p className="text-muted-stone">{fmtWhen(hp.t)}</p>
+                    <p className="font-bold text-brand-dark text-sm">{fmtN(hp.total)} reviews</p>
+                    {hover>0&&<p className="text-muted-stone">{signed(hp.total-series[hover-1].total)} vs previous point</p>}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-6">
+          <p className="text-sm font-bold text-brand-dark mb-2">By profile · {range}</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[480px]">
+              <thead><tr className="text-[11px] uppercase tracking-widest text-muted-stone text-left">
+                <th className="py-2 pr-3 font-semibold">Profile</th><th className="py-2 pr-3 font-semibold text-right">Reviews</th><th className="py-2 pr-3 font-semibold text-right">Rating</th><th className="py-2 pr-3 font-semibold text-right">Gained</th><th className="py-2 font-semibold text-right">Dropped</th>
+              </tr></thead>
+              <tbody>{data.listings.map(l=>(
+                <tr key={l.id} className="border-t border-glass-border">
+                  <td className="py-2 pr-3"><span className="font-medium text-deep-obsidian/90">{l.title}</span>{l.city&&<span className="block text-[11px] text-muted-stone">{l.city}</span>}{l.noPlaceId&&<span className="block text-[11px] text-amber-700">No Google Maps link on this listing — can't track reviews</span>}</td>
+                  <td className="py-2 pr-3 text-right font-semibold">{fmtN(l.now)}</td>
+                  <td className="py-2 pr-3 text-right">{l.rating!=null?'★ '+l.rating.toFixed(1):'—'}</td>
+                  <td className="py-2 pr-3 text-right">{l.gained?'+'+l.gained:'0'}</td>
+                  <td className={'py-2 text-right '+(l.lost?'font-semibold text-red-600':'')}>{l.lost?'−'+l.lost:'0'}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="mt-6">
+          <p className="text-sm font-bold text-brand-dark mb-1">Reviews that dropped</p>
+          <p className="text-[11px] text-muted-stone mb-3">A drop is when a profile's review count goes down between scans — usually Google filtering or removing a review. Google only shows 5 reviews at a time, so “possibly” names reviews that were visible before and gone after; it isn't proof.</p>
+          {data.removed.length===0?<p className="text-sm text-muted-stone">No drops detected since tracking started ({data.trackingSince}).</p>:(
+            <div className="space-y-2">
+              {data.removed.map((e,i)=>(
+                <div key={i} className="border border-glass-border rounded-xl p-3">
+                  <div className="flex flex-wrap items-baseline justify-between gap-2">
+                    <p className="text-sm font-semibold text-deep-obsidian/90">{e.title} <span className="font-semibold text-red-600">−{e.from-e.to}</span></p>
+                    <p className="text-[11px] text-muted-stone">{new Date(e.detectedAt).toLocaleString([], {month:'short',day:'numeric',hour:'numeric',minute:'2-digit'})} · {e.from} → {e.to}</p>
+                  </div>
+                  {e.candidates?.length>0&&(
+                    <div className="mt-2 space-y-1">
+                      {e.candidates.map((c,j)=>(
+                        <p key={j} className="text-xs text-deep-obsidian/70"><span className="text-muted-stone">Possibly:</span> {c.rating!=null?'★'+c.rating+' ':''}<b>{c.author}</b>{c.publishTime?' ('+new Date(c.publishTime).toLocaleDateString()+')':''}{c.text?' — “'+c.text+(c.text.length>=280?'…':'')+'”':''}</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </>)}
+    </div>
+  );
+}
+
+// GBP PORTFOLIO — Anthony's hand-picked RANK-AND-RENT Business Profiles side by
+// side. Standalone, no client record. The connected Google account also manages
+// CLIENT listings, so nothing is auto-included: the operator ticks which
+// listings belong here, and the report covers only those. An empty selection
+// shows the picker, never "everything".
+// Backed by /api/gbp-portfolio, which is READ-ONLY toward Google (every Business
+// Profile call is a GET through the write guard). "Calls" = Call-button taps.
+function GbpPortfolio(){
+  // Calendar month shown, "YYYY-MM". Opens on the current month; arrows step back
+  // (up to the ~18 months Google keeps) and forward (never past this month).
+  const nowD=new Date();
+  const thisMonth=nowD.getFullYear()+'-'+String(nowD.getMonth()+1).padStart(2,'0');
+  const [month,setMonth]=useState(thisMonth);
+  // Latest month asked for. A slow response for a month already left is ignored.
+  const wantMonth=useRef(thisMonth);
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState('');
+  const [data,setData]=useState(null);
+  const [picking,setPicking]=useState(false);
+  const [allLocs,setAllLocs]=useState(null);
+  const [draft,setDraft]=useState([]);
+  const [saving,setSaving]=useState(false);
+  // The SEPARATE rank-and-rent Google account. GBP Portfolio reads only from it,
+  // never from the main client account.
+  const [conn,setConn]=useState(null);
+  const [connUrl,setConnUrl]=useState('');
+  const [copied,setCopied]=useState(false);
+  const connApi=async(payload)=>{
+    const r=await fetch('/api/google-connect',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(payload)});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||j.error)throw new Error(j.error||'Something went wrong.');
+    return j;
+  };
+  const refreshConn=async()=>{try{setConn(await connApi({action:'status'}))}catch(e){setErr(e.message)}};
+  const startConnect=async()=>{
+    setErr('');setCopied(false);
+    try{const j=await connApi({action:'start'});setConnUrl(j.url)}catch(e){setErr(e.message)}
+  };
+  const copyLink=async()=>{try{await navigator.clipboard.writeText(connUrl);setCopied(true)}catch(e){setCopied(false)}};
+  const disconnect=async()=>{
+    if(!confirm('Disconnect the rank-and-rent Google account? Your listing picks will be cleared.'))return;
+    try{await connApi({action:'disconnect'});setData(null);setAllLocs(null);setPicking(false);setConnUrl('');await refreshConn()}catch(e){setErr(e.message)}
+  };
+  useEffect(()=>{refreshConn()},[]);
+
+  const api=async(payload)=>{
+    const r=await fetch('/api/gbp-portfolio',{method:'POST',headers:await authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(payload)});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok||j.error)throw new Error((j.error||'Something went wrong.')+(j.needsRnrReconnect?' Disconnect below and connect your rank-and-rent Google account again.':''));
+    return j;
+  };
+
+  const load=async(fresh)=>{
+    const reqMonth=month;
+    wantMonth.current=reqMonth;
+    setLoading(true);setErr('');
+    try{
+      const j=await api({action:'report',month:reqMonth,fresh:!!fresh});
+      if(wantMonth.current!==reqMonth)return;
+      // The server echoes the month it actually reported on; if it ever
+      // disagrees with what was asked, say so instead of mislabeling numbers.
+      if(j.month&&j.month!==reqMonth){setErr('Google data came back for '+j.month+' instead of '+reqMonth+'. Press Refresh.');return}
+      setData({...j,_month:reqMonth});
+      if(j.needsRnrConnect){setConn(c=>({...(c||{}),connected:false}));return}
+      if(j.needsSelection)openPicker();
+    }catch(e){if(wantMonth.current!==reqMonth)return;setErr(e.message);if(/rank-and-rent Google account/.test(e.message))refreshConn()}
+    finally{if(wantMonth.current===reqMonth)setLoading(false)}
+  };
+
+  const openPicker=async()=>{
+    setPicking(true);setErr('');
+    try{
+      const j=await api({action:'locations'});
+      setAllLocs(j.locations);
+      setDraft(j.selectedIds||[]);
+    }catch(e){setErr(e.message)}
+  };
+
+  const saveSelection=async()=>{
+    setSaving(true);setErr('');
+    try{
+      await api({action:'select',ids:draft});
+      setPicking(false);
+      await load(true);
+    }catch(e){setErr(e.message)}
+    finally{setSaving(false)}
+  };
+
+  useEffect(()=>{if(conn?.connected)load(false)},[month,conn?.connected]);
+
+  const shiftMonth=(delta)=>{
+    const [y,m]=month.split('-').map(Number);
+    const d=new Date(y,m-1+delta,1);
+    setMonth(d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'));
+  };
+  const monthsBack=(()=>{const [y,m]=month.split('-').map(Number);return (nowD.getFullYear()-y)*12+(nowD.getMonth()+1-m)})();
+  const monthLabel=(()=>{const [y,m]=month.split('-').map(Number);return new Date(y,m-1,1).toLocaleDateString(undefined,{month:'long',year:'numeric'})})();
+  const isCurrent=monthsBack===0;
+  const vsLabel=isCurrent?'vs same days last month':'vs previous month';
+
+  const toggle=id=>setDraft(d=>d.includes(id)?d.filter(x=>x!==id):[...d,id]);
+  const fmtN=n=>(n==null?'—':Number(n).toLocaleString());
+  const Delta=({cur,prev,light})=>{
+    const base='text-[11px] ';
+    if(!prev&&!cur)return <span className={base+(light?'text-white/70':'text-muted-stone')}>no change</span>;
+    if(!prev)return <span className={base+'font-semibold '+(light?'text-white/90':'text-green-700')}>new activity</span>;
+    const pct=Math.round(((cur-prev)/prev)*100);
+    if(pct===0)return <span className={base+(light?'text-white/70':'text-muted-stone')}>flat {vsLabel}</span>;
+    return <span className={base+'font-semibold '+(light?'text-white/90':(pct>0?'text-green-700':'text-red-600'))}>{pct>0?'▲':'▼'} {Math.abs(pct)}% {vsLabel}</span>;
+  };
+  const Stat=({label,value,cur,prev,hero,note})=>(
+    <div className={(hero?'bg-brand text-white shadow-xl shadow-brand/20':'stitch-glass-card')+' rounded-[24px] p-6 flex flex-col min-h-[130px]'}>
+      <p className={'text-[11px] font-semibold uppercase tracking-widest '+(hero?'opacity-80':'text-muted-stone')}>{label}</p>
+      <div className="mt-auto pt-3">
+        <h3 className={'text-4xl font-bold tracking-tight '+(hero?'':'text-brand-dark')}>{fmtN(value)}</h3>
+        {prev!==undefined&&<Delta cur={cur} prev={prev} light={hero}/>}
+        {note&&<span className={'block text-[11px] '+(hero?'text-white/70':'text-muted-stone')}>{note}</span>}
+      </div>
+    </div>
+  );
+
+  const forThisMonth=!!data&&(data.needsSelection||data._month===month);
+  const hasReport=forThisMonth&&!data.needsSelection&&data.totals;
+  const maxCalls=hasReport?Math.max(1,...data.locations.map(l=>l.calls)):1;
+
+  return(
+    <div className="fade-in font-manrope">
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 mb-6">
+        <div>
+          <h2 className="text-2xl font-bold text-brand-dark">GBP Portfolio</h2>
+          <p className="text-sm text-muted-stone mt-1">Your rank-and-rent profiles only — calls, website clicks, impressions and reviews. Read-only.</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-1 stitch-glass-card rounded-xl p-1">
+            <button onClick={()=>shiftMonth(-1)} disabled={loading||monthsBack>=17} aria-label="Previous month" className="touch-target px-3 py-1 rounded-lg text-lg text-deep-obsidian/70 hover:bg-black/5 disabled:opacity-30">‹</button>
+            <span className="text-sm font-semibold text-brand-dark min-w-[9rem] text-center">{monthLabel}</span>
+            <button onClick={()=>shiftMonth(1)} disabled={loading||isCurrent} aria-label="Next month" className="touch-target px-3 py-1 rounded-lg text-lg text-deep-obsidian/70 hover:bg-black/5 disabled:opacity-30">›</button>
+          </div>
+          {!isCurrent&&<button onClick={()=>setMonth(thisMonth)} className="touch-target px-3 py-2 rounded-xl text-sm font-medium stitch-glass-card text-deep-obsidian/70 hover:bg-black/5">This month</button>}
+          <button onClick={()=>load(true)} disabled={loading} className="touch-target px-3 py-2 rounded-xl text-sm font-medium stitch-glass-card text-deep-obsidian/70 hover:bg-black/5">{loading?'Loading…':'Refresh'}</button>
+          {conn?.connected&&<button onClick={openPicker} className="touch-target px-3 py-2 rounded-xl text-sm font-semibold border border-brand text-brand hover:bg-brand/5">Choose listings</button>}
+        </div>
+      </div>
+
+      {err&&<div className="bg-red-50 text-red-700 rounded-xl p-3 text-sm mb-4">{err}</div>}
+
+      {conn&&!conn.connected&&(
+        <div className="stitch-glass-card rounded-[24px] p-6 mb-4">
+          <h3 className="font-bold text-brand-dark mb-1">Connect your rank-and-rent Google account</h3>
+          <p className="text-sm text-muted-stone mb-4">Use the separate Gmail that manages your rank-and-rent listings. It is used only on this page and kept apart from your main client connection.</p>
+          {!connUrl?(
+            <button onClick={startConnect} className="touch-target px-4 py-2 rounded-xl text-sm font-semibold bg-brand text-white hover:bg-brand-hover">Get connect link</button>
+          ):(
+            <div className="space-y-3">
+              <p className="text-sm text-deep-obsidian/80">For best separation, <b>copy this link and open it in the Chrome profile</b> where only that Gmail is signed in. The link works once and expires in 15 minutes.</p>
+              <div className="flex flex-wrap gap-2">
+                <button onClick={copyLink} className="touch-target px-4 py-2 rounded-xl text-sm font-semibold bg-brand text-white hover:bg-brand-hover">{copied?'Copied ✓':'Copy link'}</button>
+                <button onClick={refreshConn} className="touch-target px-4 py-2 rounded-xl text-sm font-medium stitch-glass-card text-deep-obsidian/70">Done connecting — check</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      {conn?.connected&&<p className="text-[11px] text-muted-stone mb-3">Reading from <b>{conn.email||'your rank-and-rent Google account'}</b> · <button onClick={disconnect} className="underline hover:text-red-600">Disconnect</button></p>}
+
+      {picking&&(
+        <div className="stitch-glass-card rounded-[24px] p-6 mb-4">
+          <div className="flex items-baseline justify-between gap-3 mb-1 flex-wrap">
+            <h3 className="font-bold text-brand-dark">Which profiles are rank-and-rent?</h3>
+            <span className="text-xs text-muted-stone">{draft.length} selected</span>
+          </div>
+          <p className="text-xs text-muted-stone mb-4">Tick only your rank-and-rent listings. Client listings stay out of this report.</p>
+          {!allLocs?<p className="text-sm text-muted-stone">Loading your listings…</p>:(
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-4">
+              {allLocs.map(l=>(
+                <label key={l.id} className={'touch-target flex items-center gap-3 p-3 rounded-xl border cursor-pointer '+(draft.includes(l.id)?'border-brand bg-brand/5':'border-glass-border hover:bg-black/[0.02]')}>
+                  <input type="checkbox" checked={draft.includes(l.id)} onChange={()=>toggle(l.id)} className="w-5 h-5 accent-brand flex-shrink-0"/>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-medium text-deep-obsidian/90 truncate">{l.title}</span>
+                    <span className="block text-[11px] text-muted-stone">{l.city||'—'}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <button onClick={saveSelection} disabled={saving||!allLocs} className="touch-target px-4 py-2 rounded-xl text-sm font-semibold bg-brand text-white hover:bg-brand-hover disabled:opacity-60">{saving?'Saving…':'Save selection'}</button>
+            {hasReport&&<button onClick={()=>setPicking(false)} className="touch-target px-4 py-2 rounded-xl text-sm font-medium stitch-glass-card text-deep-obsidian/70">Cancel</button>}
+          </div>
+        </div>
+      )}
+
+      {loading&&!hasReport&&<div className="text-center py-12"><div className="inline-block w-8 h-8 border-4 border-brand border-t-transparent rounded-full animate-spin mb-2"/><p className="text-sm text-muted-stone">Loading {monthLabel}…</p></div>}
+
+      {conn?.connected&&data?.needsSelection&&!picking&&(
+        <div className="stitch-glass-card rounded-[24px] p-6 text-center">
+          <p className="text-sm text-muted-stone mb-3">No listings chosen yet. Pick your rank-and-rent profiles to see their numbers.</p>
+          <button onClick={openPicker} className="touch-target px-4 py-2 rounded-xl text-sm font-semibold bg-brand text-white">Choose listings</button>
+        </div>
+      )}
+
+      {hasReport&&(<>
+        {data.failed?.length>0&&<div className="bg-red-50 text-red-700 rounded-xl p-3 text-sm mb-4"><b>Totals are incomplete.</b> Google didn't return numbers for {data.failed.join(', ')} — those listings are left out of the totals. Press Refresh to try again.</div>}
+        {data.reviewsUnavailable?.length>0&&<div className="bg-amber-50 text-amber-800 rounded-xl p-3 text-xs mb-4">Review counts couldn't be loaded for {data.reviewsUnavailable.join(', ')}, so Total reviews is missing them.</div>}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+          <Stat hero label="Calls" value={data.totals.calls} cur={data.totals.calls} prev={data.totals.prevCalls}/>
+          <Stat label="Website clicks" value={data.totals.websiteClicks} cur={data.totals.websiteClicks} prev={data.totals.prevWebsiteClicks}/>
+          <Stat label="Impressions" value={data.totals.views} cur={data.totals.views} prev={data.totals.prevViews}/>
+          <Stat label="Total reviews" value={data.totals.reviews} note="all-time on Google, not just this month"/>
+        </div>
+        <p className="text-[11px] text-muted-stone mb-4">{data.locationCount} listing{data.locationCount===1?'':'s'} · {data.period?('Counting '+data.period.start+' to '+data.period.end+' vs '+data.previousPeriod.start+' to '+data.previousPeriod.end):'Google has no numbers for this month yet'}{data.trimmedForLag?' · Google is still filling in the most recent days':''}{data.cachedAt?' · updated '+new Date(data.cachedAt).toLocaleTimeString():''} · "Calls" are taps on the Call button</p>
+        {data.missingIds?.length>0&&<div className="bg-amber-50 text-amber-800 rounded-xl p-3 text-xs mb-4">{data.missingIds.length} selected listing{data.missingIds.length===1?' is':'s are'} no longer visible to your Google account and {data.missingIds.length===1?'was':'were'} left out.</div>}
+
+        <div className="stitch-glass-card rounded-[24px] p-6">
+          <h3 className="font-bold text-brand-dark mb-4">Listings ranked by calls</h3>
+          <div className="space-y-4">
+            {data.locations.map((l,i)=>(
+              <div key={l.id} className="flex items-start gap-3">
+                <span className="text-xs text-muted-stone w-6 flex-shrink-0 mt-1">#{i+1}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-baseline justify-between gap-2 flex-wrap mb-1">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-deep-obsidian/90 truncate">{l.title}</p>
+                      <p className="text-[11px] text-muted-stone">{l.city||'—'}{l.rating!=null?' · ★ '+l.rating.toFixed(1)+' ('+fmtN(l.reviews)+' reviews)':''}</p>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      {l.error?<p className="text-sm font-semibold text-red-600">Couldn't load</p>:<>
+                      <p className="text-lg font-bold text-brand-dark leading-none">{fmtN(l.calls)} <span className="text-xs font-medium text-muted-stone">calls</span></p>
+                      <Delta cur={l.calls} prev={l.prevCalls}/></>}
+                    </div>
+                  </div>
+                  <div className="h-1.5 w-full rounded-full bg-black/[0.06] overflow-hidden mb-2">
+                    <div className="h-full rounded-full bg-brand" style={{width:Math.max(2,Math.round(l.calls/maxCalls*100))+'%'}}/>
+                  </div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-stone">
+                    <span>{fmtN(l.websiteClicks)} website clicks</span>
+                    <span>{fmtN(l.views)} impressions</span>
+                    <span>{fmtN(l.directions)} directions</span>
+                    {l.error&&<span className="text-red-600">{l.error}</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </>)}
+      {conn?.connected&&hasReport&&<PortfolioReviews/>}
+    </div>
+  );
 }
 
 function App(){
