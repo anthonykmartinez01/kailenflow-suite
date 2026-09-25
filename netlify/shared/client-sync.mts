@@ -6,7 +6,7 @@ import { getGoogleAccessToken } from "./google-auth.mts";
 import { recentCommits, githubToken } from "./github-work.mts";
 import { getSiteByClientId } from "./page-publisher/firestore.mts";
 import { applyIngest, type IngestRow } from "./client-ingest-merge.mts";
-import { merchyntKey, merchyntSummary, merchyntStatus } from "./merchynt.mts";
+import { merchyntKey, merchyntSummary, merchyntStatus, discoverSlug } from "./merchynt.mts";
 
 // The unattended half of Client Management: refresh Stripe, and (only if the
 // permission is actually granted) refresh "last contacted" from Gmail. Shared
@@ -98,18 +98,26 @@ export async function ingestFromRepo(): Promise<{ ok: boolean; reason?: string; 
  * Paige (Merchynt) status per client. Needs each client's Paige slug saved in
  * Client Management — a client without one is reported, never guessed at.
  */
-export async function merchyntSyncAll(): Promise<{ ok: boolean; reason?: string; checked?: number; noSlug?: string[]; failed?: string[] }> {
+export async function merchyntSyncAll(): Promise<{ ok: boolean; reason?: string; checked?: number; discovered?: string[]; noSlug?: string[]; failed?: string[] }> {
   const key = merchyntKey();
   if (!key) return { ok: false, reason: "MERCHYNT_API_KEY isn't set in Netlify." };
   const store = getStore(STORE);
   const records = ((await store.get(RECORDS, { type: "json" }).catch(() => null)) || {}) as Record<string, any>;
   const app = await readAppData();
-  const noSlug: string[] = [], failed: string[] = [];
+  const noSlug: string[] = [], failed: string[] = [], discovered: string[] = [];
   let checked = 0;
 
   for (const client of app.clients || []) {
     const rec = records[client.id] || {};
-    const slug = String(rec.merchyntSlug || "").trim();
+    let slug = String(rec.merchyntSlug || "").trim();
+    if (!slug) {
+      // Work the slug out from the business name and remember it once found,
+      // so this costs nothing on later runs.
+      try {
+        const found = await discoverSlug(client.name || "", key);
+        if (found) { slug = found; rec.merchyntSlug = found; records[client.id] = rec; discovered.push(`${client.name} → ${found}`); }
+      } catch { /* fall through to noSlug */ }
+    }
     if (!slug) { noSlug.push(client.name || client.id); continue; }
     try {
       const summary = await merchyntSummary(slug, key);
@@ -123,7 +131,7 @@ export async function merchyntSyncAll(): Promise<{ ok: boolean; reason?: string;
     }
   }
   await store.setJSON(RECORDS, records);
-  return { ok: true, checked, noSlug, failed };
+  return { ok: true, checked, discovered, noSlug, failed };
 }
 
 /**

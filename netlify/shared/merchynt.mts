@@ -25,6 +25,49 @@ async function get(path: string, key: string): Promise<any> {
   return r.json();
 }
 
+/**
+ * Slug candidates for a business name, best first. Paige slugs look like
+ * "higher-power-electric": lowercase, hyphenated, punctuation dropped.
+ * "&" becomes "and" in some accounts and disappears in others, so both are
+ * tried, as are versions without a trailing LLC / Inc / Co.
+ */
+export function slugCandidates(name: string): string[] {
+  const base = String(name || "").trim().toLowerCase();
+  if (!base) return [];
+  // Apostrophes vanish rather than becoming a separator: "Brandon's" is
+  // "brandons", not "brandon-s". The split form is tried too, further down.
+  const clean = (s: string) => s.replace(/['’]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").replace(/-{2,}/g, "-");
+  const cleanSplit = (s: string) => s.replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").replace(/-{2,}/g, "-");
+  const noSuffix = base.replace(/\b(llc|l\.l\.c\.?|inc\.?|co\.?|corp\.?|ltd\.?)\b/g, " ").trim();
+  const out = [
+    clean(base.replace(/&/g, "and")),
+    clean(base.replace(/&/g, " ")),
+    clean(noSuffix.replace(/&/g, "and")),
+    clean(noSuffix.replace(/&/g, " ")),
+    clean(base.split(/\s+(?:heating|air|electric|plumbing|roofing|cleaning)\b/)[0]),
+    cleanSplit(base.replace(/&/g, "and")),
+  ].filter(Boolean);
+  return [...new Set(out)];
+}
+
+/**
+ * The slug Paige actually answers for, or null. A candidate only counts if the
+ * API returns a real response for it — never a guess that merely looks right,
+ * because a wrong slug would hang another client's reviews on this tile.
+ */
+export async function discoverSlug(name: string, key: string): Promise<string | null> {
+  for (const candidate of slugCandidates(name)) {
+    try {
+      const data = await get(`/reviews?slug=${encodeURIComponent(candidate)}`, key);
+      if (data === null) continue;                    // 404 — not this one
+      const arr = asArray(data);
+      const looksReal = arr.length > 0 || typeof (data as any)?.total === "number";
+      if (looksReal) return candidate;
+    } catch { /* 401 etc. — stop guessing, the caller reports it */ }
+  }
+  return null;
+}
+
 export type MerchyntSummary = {
   reviews: number | null;
   rating: number | null;
